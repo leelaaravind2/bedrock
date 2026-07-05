@@ -44,6 +44,9 @@ import { buildFileSet, computePlan, renderPreview, applyPlan } from './core/rege
 import { VersionStore } from './core/versioning.js';
 import { selectBackendPlugin } from './plugins/registry.js';
 import type { BackendPlugin } from './core/plugin.js';
+import { assembleBlueprint, type BlueprintChoices } from './core/assemble.js';
+import { applyProfile, fullOptionSet, type OrgProfile } from './core/org-profile.js';
+import { DEFAULT_VERSIONS } from './core/versions.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)); // .../generator/dist
 const GENERATOR_DIR = path.join(HERE, '..');
@@ -56,6 +59,22 @@ const UI_DIR = path.join(GENERATOR_DIR, 'ui');
 const OUTPUT_ROOT = process.env.THRAKSHA_UI_OUTPUT || path.join(REPO_ROOT, 'output');
 const STORE_ROOT = process.env.THRAKSHA_UI_STORE || path.join(REPO_ROOT, '.thraksha', 'versions');
 const PORT = Number(process.env.PORT || 4317);
+
+// The org-profile file (Day 13). ABSENT = no profile ⇒ the FULL option set + existing
+// defaults ⇒ the wizard's simple-mode path is the literal bypass. Set THRAKSHA_ORG_PROFILE
+// to a canonical org-profile.json to govern the choices the wizard presents. The profile
+// is WIZARD-SIDE only — it shapes /api/options, never /api/assemble (never generation).
+const ORG_PROFILE_FILE = process.env.THRAKSHA_ORG_PROFILE || '';
+
+/** Load the org-profile if configured and readable; ABSENT/unreadable ⇒ null (no profile). */
+async function loadOrgProfile(): Promise<OrgProfile | null> {
+  if (!ORG_PROFILE_FILE) return null;
+  try {
+    return JSON.parse(await fs.readFile(ORG_PROFILE_FILE, 'utf8')) as OrgProfile;
+  } catch {
+    return null; // a missing/malformed profile falls back to no-profile (the literal bypass)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // In-memory session state: the one Project Model the person is editing.
@@ -194,6 +213,40 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   // --- read current model ---
   if (route === 'GET /api/state') {
     sendJson(res, 200, stateResponse());
+    return;
+  }
+
+  // --- the option set the wizard presents (Day 16, surfaces Day 11 + Day 13) ---
+  //     Org-profile runs FIRST: applyProfile(fullOptionSet(), profile) → the filtered
+  //     optionSet + forced defaults + soft-rule advisories. Profile-ABSENT ⇒ the full
+  //     set + existing defaults + no advisories (so simple-mode is the literal bypass).
+  //     Also returns DEFAULT_VERSIONS (the framework+version pins, Day 11) so the wizard
+  //     can offer per-backend version keys defaulted to the current pin. This is PURE
+  //     INPUT METADATA — enforcement stays wizard-side, never in the blueprint/output.
+  //     (Distinct from the /api/versions/* SNAPSHOT store — a deliberate naming split.)
+  if (route === 'GET /api/options') {
+    const profile = await loadOrgProfile();
+    const applied = applyProfile(fullOptionSet(), profile);
+    sendJson(res, 200, {
+      optionSet: applied.optionSet,
+      defaults: applied.defaults,
+      advisories: applied.advisories,
+      defaultVersions: DEFAULT_VERSIONS,
+      profileId: profile ? profile.id : null,
+    });
+    return;
+  }
+
+  // --- the ONE canonical assembly path (Day 16): choices → assembleBlueprint → model ---
+  //     The progressive-disclosure wizard collects a full BlueprintChoices (concrete
+  //     values only — the profile already resolved its forced defaults into the picks)
+  //     and POSTs it here in one shot. The server calls the SAME assembleBlueprint the
+  //     CLI/demos feed, so UI==CLI is STRUCTURAL: same choices → same ProjectState →
+  //     byte-identical output. No UI-injected value or ordering; no profile metadata.
+  if (route === 'POST /api/assemble') {
+    const choices = await readJson<BlueprintChoices>(req);
+    model = assembleBlueprint(choices); // canonical, pure — identical to the CLI path
+    sendJson(res, 200, { state: model.getState(), defaultsApplied: model.getDefaultsApplied() });
     return;
   }
 

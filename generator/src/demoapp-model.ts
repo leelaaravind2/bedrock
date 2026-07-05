@@ -12,7 +12,8 @@
  * No AI (ADR-001). No randomness (ADR-003). Pure construction.
  */
 
-import { createProjectModel, type ProjectModel } from './core/project-model.js';
+import { type ProjectModel } from './core/project-model.js';
+import { assembleBlueprint } from './core/assemble.js';
 
 /**
  * Build and return the DemoApp Project Model.
@@ -21,37 +22,46 @@ import { createProjectModel, type ProjectModel } from './core/project-model.js';
  * 196f5472…). Pass a different backend (e.g. 'Express') to drive the SAME
  * blueprint through a different backend plugin — that is the only field that
  * changes which plugin runs.
+ *
+ * Day 16: this programmatic ("CLI") builder now feeds the SAME canonical
+ * `assembleBlueprint(choices)` the wizard backend feeds. The choices below are the
+ * exact Phase-A backbone + the single Ticket entity it always had — no versions /
+ * style / integrations / description are supplied, so each stays the model's own
+ * current-implied default (a literal bypass). The assembled ProjectState is therefore
+ * byte-for-byte what the previous createProjectModel+addEntity sequence produced, and
+ * UI==CLI is STRUCTURAL: the wizard sending these same choices assembles the same state.
  */
 export function buildDemoAppModel(
   overrides: { backend?: string; database?: string; projectType?: 'Web App' | 'API-only' } = {},
 ): ProjectModel {
-  // Phase A — answered once, up front (these mirror the original Step-1 inputs
-  // exactly, so generation stays byte-for-byte identical). projectType defaults to
-  // 'Web App' (the literal bypass); pass 'API-only' to exercise the Day-15 type.
-  const model = createProjectModel({
-    projectName: 'DemoApp', // Q1 Mandatory
-    projectType: overrides.projectType ?? 'Web App', // Q2 Mandatory
-    backend: overrides.backend ?? 'Spring Boot', // Q3 Mandatory
-    frontend: 'React', // Q4 Mandatory (API-only normalises this to 'None')
-    database: overrides.database ?? 'PostgreSQL', // Q5 Mandatory (default keeps hashes frozen)
-    multiUser: true, // Q6 Mandatory (multi-user-ready)
-    auth: 'Simple login', // Q7 Default
-  });
-
-  // Step 3 — one business entity. Adding it makes the generator emit a complete,
-  // working CRUD REST API (entity + repository + DTO + service + controller +
-  // migration), with per-user owner scoping because the project is multi-user.
-  // Only name + type are mandatory per INTAKE-SPEC; required/unique default and
-  // are shown by the generator (ADR-004).
-  model.addEntity({
-    name: 'Ticket',
-    fields: [
-      { name: 'title', type: 'String', required: true }, // mandatory text
-      { name: 'code', type: 'String', unique: true }, // unique business key
-      { name: 'priority', type: 'Integer' }, // optional number
-      { name: 'done', type: 'Boolean' }, // optional flag
+  return assembleBlueprint({
+    // Phase A — answered once, up front (these mirror the original Step-1 inputs
+    // exactly, so generation stays byte-for-byte identical). projectType defaults to
+    // 'Web App' (the literal bypass); pass 'API-only' to exercise the Day-15 type.
+    settings: {
+      projectName: 'DemoApp', // Q1 Mandatory
+      projectType: overrides.projectType ?? 'Web App', // Q2 Mandatory
+      backend: overrides.backend ?? 'Spring Boot', // Q3 Mandatory
+      frontend: 'React', // Q4 Mandatory (API-only normalises this to 'None')
+      database: overrides.database ?? 'PostgreSQL', // Q5 Mandatory (default keeps hashes frozen)
+      multiUser: true, // Q6 Mandatory (multi-user-ready)
+      auth: 'Simple login', // Q7 Default
+    },
+    // Step 3 — one business entity. Adding it makes the generator emit a complete,
+    // working CRUD REST API (entity + repository + DTO + service + controller +
+    // migration), with per-user owner scoping because the project is multi-user.
+    // Only name + type are mandatory per INTAKE-SPEC; required/unique default and
+    // are shown by the generator (ADR-004).
+    entities: [
+      {
+        name: 'Ticket',
+        fields: [
+          { name: 'title', type: 'String', required: true }, // mandatory text
+          { name: 'code', type: 'String', unique: true }, // unique business key
+          { name: 'priority', type: 'Integer' }, // optional number
+          { name: 'done', type: 'Boolean' }, // optional flag
+        ],
+      },
     ],
   });
-
-  return model;
 }

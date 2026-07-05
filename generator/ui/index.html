@@ -5,7 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Thraksha</title>
     <!-- Uses locally-installed Plus Jakarta Sans / JetBrains Mono if present, else a
-         system fallback — no network dependency, so it works fully offline. -->
+         system fallback — no network dependency, so it works fully offline.
+
+         Day 16 — PROGRESSIVE-DISCLOSURE wizard. The input surface grows without an
+         interrogation (ADR-004): only the REQUIRED backbone (name/type/backend/database
+         + entities) is shown by default; an "Advanced" toggle reveals the optional
+         dimensions (frontend override, multi-user, auth, framework+version pins, coding
+         style, integrations); contextual reveals surface an option only once a prior
+         choice implies it. The wizard collects ONE canonical BlueprintChoices and POSTs
+         it to /api/assemble — the SAME assembleBlueprint the CLI feeds, so UI==CLI is
+         structural. Simple-mode + accept-defaults = the current default blueprint (the
+         literal bypass). The Simple/Advanced preference persists in localStorage and is
+         UI-ONLY — it changes what is SHOWN, never what is GENERATED. -->
     <style>
       /* ── Design tokens (from the Figma export) ─────────────────────────── */
       :root {
@@ -13,6 +24,7 @@
         --ink: #0f172a; --ink2: #374151; --muted: #64748b; --muted2: #94a3b8;
         --line: #e2e8f0; --line2: #f1f5f9; --bg: #f8fafc; --white: #fff;
         --green: #22c55e; --green-bg: #f0fdf4; --green-line: #bbf7d0; --green-ink: #166534;
+        --amber-bg: #fffbeb; --amber-line: #fde68a; --amber-ink: #92400e;
         --radius: 12px; --shadow: 0 1px 2px rgba(15,23,42,.05);
         --sans: 'Plus Jakarta Sans', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
         --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -23,7 +35,7 @@
       /* ── Top bar + stepper ─────────────────────────────────────────────── */
       .topbar { height: 56px; background: var(--white); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 50; }
       .topbar-inner { max-width: 1200px; height: 100%; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; }
-      .brand { display: flex; align-items: center; gap: 8px; width: 160px; }
+      .brand { display: flex; align-items: center; gap: 8px; width: 200px; }
       .brand-badge { width: 28px; height: 28px; border-radius: 7px; background: var(--blue); color: #fff; display: flex; align-items: center; justify-content: center; }
       .brand-name { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
       .stepper { display: flex; align-items: center; }
@@ -35,7 +47,12 @@
       .step.complete .step-num { background: var(--blue); color: #fff; box-shadow: none; }
       .step.complete .step-label { color: var(--ink2); }
       .step-sep { width: 24px; height: 1px; background: var(--line); margin: 0 2px; }
-      .topbar-spacer { width: 160px; }
+
+      /* ── Simple/Advanced mode toggle (right of the top bar) ─────────────── */
+      .mode { display: flex; align-items: center; gap: 8px; width: 200px; justify-content: flex-end; }
+      .mode-seg { display: inline-flex; background: var(--line2); border-radius: 8px; padding: 2px; }
+      .mode-seg button { font: inherit; font-size: 12px; font-weight: 600; border: none; background: transparent; color: var(--muted); padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+      .mode-seg button.on { background: var(--white); color: var(--blue); box-shadow: var(--shadow); }
 
       /* ── Status line ───────────────────────────────────────────────────── */
       #log { max-width: 1200px; margin: 0 auto; padding: 6px 24px 0; min-height: 1.1rem; font-size: 12.5px; }
@@ -47,9 +64,9 @@
       .screen { display: none; }
       .screen.active { display: block; }
       .wrap { margin: 0 auto; }
-      .wrap-520 { max-width: 520px; }
+      .wrap-560 { max-width: 560px; }
       .wrap-1100 { max-width: 1100px; }
-      .page-head { margin-bottom: 28px; }
+      .page-head { margin-bottom: 24px; }
       .page-head h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
       .page-head p { color: var(--muted); font-size: 14px; margin: 6px 0 0; }
 
@@ -60,9 +77,11 @@
       .field { margin-bottom: 18px; }
       .field:last-child { margin-bottom: 0; }
       .lbl { display: block; font-size: 13px; font-weight: 600; color: var(--ink2); margin-bottom: 6px; }
+      .req-star { color: var(--blue); font-weight: 700; }
       .divider { height: 1px; background: var(--line2); margin: 20px 0; }
       .inp { width: 100%; background: var(--white); border: 1px solid var(--line); color: var(--ink); font: inherit; font-size: 14px; border-radius: 8px; padding: 9px 12px; }
       .inp:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+      .inp:disabled { background: var(--line2); color: var(--muted); cursor: not-allowed; }
       .inp.mono { font-family: var(--mono); }
       select.inp { appearance: none; -webkit-appearance: none; padding-right: 30px;
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
@@ -78,12 +97,35 @@
       .btn-ghost { background: transparent; color: var(--muted); border-color: var(--line); }
       .btn-ghost:hover { background: var(--bg); color: var(--ink2); }
       .btn-sm { padding: 7px 12px; font-size: 13px; }
-      .btn-row { display: flex; align-items: center; gap: 10px; }
+      .btn-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
       .ic { width: 16px; height: 16px; display: inline-block; vertical-align: middle; }
       .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
       .foot-nav { margin-top: 32px; display: flex; align-items: center; justify-content: space-between; }
 
-      /* ── Screen 2: entity editor grid ──────────────────────────────────── */
+      /* ── Progressive-disclosure blocks ─────────────────────────────────── */
+      .adv-section { margin-top: 4px; }
+      .adv-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--muted2); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 4px; }
+      /* Advanced-only fields: hidden in simple mode, shown when body has mode-advanced. */
+      .adv-only { display: none; }
+      body.mode-advanced .adv-only { display: block; }
+      .simple-note { display: block; }
+      body.mode-advanced .simple-note { display: none; }
+      .adv-note { font-size: 12px; color: var(--muted); }
+
+      /* ── Org-policy banner (Day 13 advisories + forced defaults) ───────── */
+      .policy { border: 1px solid var(--amber-line); background: var(--amber-bg); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 20px; }
+      .policy.none { border-color: var(--line); background: var(--bg); }
+      .policy .t { font-size: 12px; font-weight: 700; color: var(--amber-ink); text-transform: uppercase; letter-spacing: .04em; }
+      .policy.none .t { color: var(--muted2); }
+      .policy ul { margin: 8px 0 0; padding-left: 18px; }
+      .policy li { font-size: 12.5px; color: var(--amber-ink); margin: 2px 0; }
+      .lock-note { font-size: 11px; color: var(--amber-ink); margin-top: 4px; }
+
+      /* ── Version pins ──────────────────────────────────────────────────── */
+      .ver-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .ver-item .lbl { text-transform: capitalize; }
+
+      /* ── Entity editor ─────────────────────────────────────────────────── */
       .grid-2 { display: grid; grid-template-columns: 1fr 340px; gap: 24px; align-items: start; }
       .field-head, .field-row { display: grid; grid-template-columns: 1fr 132px 74px 74px 34px; gap: 8px; align-items: center; }
       .field-head { margin-bottom: 8px; }
@@ -103,7 +145,7 @@
       .panel-head .b { font-size: 11px; color: var(--muted2); font-family: var(--mono); }
       pre.code { margin: 0; padding: 16px; background: var(--bg); font-family: var(--mono); font-size: 12px; line-height: 1.55; color: var(--ink2); white-space: pre-wrap; overflow: auto; }
 
-      /* ── Screen 3: blueprint ───────────────────────────────────────────── */
+      /* ── Blueprint ─────────────────────────────────────────────────────── */
       .bp-summary { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 16px 20px; margin-bottom: 20px; }
       .bp-name { font-size: 15px; font-weight: 700; }
       .bp-dot { color: var(--muted2); }
@@ -129,7 +171,7 @@
       details.prev { margin-top: 12px; }
       details.prev summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink2); }
 
-      /* ── Screen 4: generated project ───────────────────────────────────── */
+      /* ── Generated project ─────────────────────────────────────────────── */
       .banner { display: flex; align-items: center; gap: 12px; background: var(--green-bg); border: 1px solid var(--green-line); border-radius: var(--radius); padding: 14px 20px; margin-bottom: 20px; }
       .banner .tick { width: 24px; height: 24px; border-radius: 999px; background: var(--green); color: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
       .banner .msg { font-size: 13px; font-weight: 500; color: var(--green-ink); }
@@ -153,8 +195,6 @@
       .ver-save { padding: 12px; border-bottom: 1px solid var(--line2); }
       .ver-save .row { display: flex; gap: 6px; }
       .ver-save .inp { font-size: 12px; padding: 7px 9px; }
-      .btn-blue-soft { width: 100%; justify-content: center; background: var(--blue-bg); color: var(--blue); border: 1px solid #bfdbfe; }
-      .btn-blue-soft:hover { background: #dbeafe; }
       pre.versions { margin: 0; padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.7; color: var(--ink2); white-space: pre-wrap; }
       .ver-rollback { padding: 12px; border-top: 1px solid var(--line2); display: flex; align-items: center; gap: 6px; }
       .ver-rollback .inp { width: 56px; font-size: 12px; padding: 6px 8px; }
@@ -173,91 +213,136 @@
           <div class="step-sep"></div>
           <div class="step" data-n="2"><span class="step-num">2</span><span class="step-label">Entities</span></div>
           <div class="step-sep"></div>
-          <div class="step" data-n="3"><span class="step-num">3</span><span class="step-label">Style &amp; integrations</span></div>
+          <div class="step" data-n="3"><span class="step-num">3</span><span class="step-label">Blueprint</span></div>
           <div class="step-sep"></div>
-          <div class="step" data-n="4"><span class="step-num">4</span><span class="step-label">Blueprint</span></div>
-          <div class="step-sep"></div>
-          <div class="step" data-n="5"><span class="step-num">5</span><span class="step-label">Generated</span></div>
+          <div class="step" data-n="4"><span class="step-num">4</span><span class="step-label">Generated</span></div>
         </nav>
-        <div class="topbar-spacer"></div>
+        <div class="mode" title="Progressive disclosure — a UI preference only; it never changes what is generated.">
+          <div class="mode-seg">
+            <button id="modeSimple" onclick="setMode('simple')">Simple</button>
+            <button id="modeAdvanced" onclick="setMode('advanced')">Advanced</button>
+          </div>
+        </div>
       </div>
     </header>
 
     <div id="log"></div>
 
     <main>
-      <!-- ── Screen 1: Project basics ──────────────────────────────────── -->
+      <!-- ── Screen 1: Project (progressive) ───────────────────────────── -->
       <section class="screen active" data-step="1">
-        <div class="wrap wrap-520">
+        <div class="wrap wrap-560">
           <div class="page-head">
             <h1>Set up your project</h1>
-            <p>Tell us what you&#39;re building.</p>
+            <p>Only what changes the structure is required. Everything else has a smart default you can override under <strong>Advanced</strong>.</p>
           </div>
+
+          <!-- Org-policy (Day 13): forced defaults + soft advisories, if a profile is loaded. -->
+          <div id="policyBanner" class="policy none" style="display:none"></div>
+
           <div class="card">
             <div class="card-body">
+              <!-- REQUIRED backbone — always shown (simple mode). -->
               <div class="field">
-                <label class="lbl">Project name</label>
+                <label class="lbl">Project name <span class="req-star">*</span></label>
                 <input id="projectName" class="inp" value="DemoApp" placeholder="e.g. DemoApp" />
               </div>
               <div class="field">
-                <label class="lbl">Description <span class="hint" style="font-weight:400">(optional — appears in the README)</span></label>
-                <textarea id="projectDescription" class="inp" rows="2" placeholder="e.g. A small ticket tracker for the support team."></textarea>
+                <label class="lbl">Project type <span class="req-star">*</span></label>
+                <select id="projectType" class="inp" onchange="onTypeChange()"></select>
               </div>
               <div class="field">
-                <label class="lbl">Project type</label>
-                <select id="projectType" class="inp" onchange="onTypeChange()"><option>Web App</option><option>API-only</option></select>
-              </div>
-              <div class="divider"></div>
-              <div class="field">
-                <label class="lbl">Backend</label>
-                <select id="backend" class="inp">
-                  <option value="Spring Boot">Spring Boot</option>
-                  <option value="Express">Express</option>
-                  <option value="FastAPI">FastAPI</option>
-                  <option value="Django">Django</option>
-                  <option value="Go">Go</option>
-                </select>
-              </div>
-              <div class="field" id="frontendField">
-                <label class="lbl">Frontend</label>
-                <select id="frontend" class="inp"><option>React</option><option>None</option></select>
-              </div>
-              <div class="field" id="frontendConsequence" style="display:none">
-                <div class="hint">Frontend: <strong>None</strong> — API-only projects have no frontend (the project type sets it to None).</div>
+                <label class="lbl">Backend <span class="req-star">*</span></label>
+                <select id="backend" class="inp" onchange="onBackendChange()"></select>
               </div>
               <div class="field">
-                <label class="lbl">Database</label>
-                <select id="database" class="inp"><option>PostgreSQL</option><option>MySQL</option><option>None</option></select>
+                <label class="lbl">Database <span class="req-star">*</span></label>
+                <select id="database" class="inp"></select>
               </div>
-              <div class="divider"></div>
-              <div class="field">
-                <label class="lbl">Multi-user</label>
-                <select id="multiUser" class="inp"><option value="true">Yes — multi-user ready</option><option value="false">No</option></select>
+
+              <!-- ADVANCED (conditional) — hidden until the Advanced mode is on. -->
+              <div id="advBlock" class="adv-only">
+                <div class="divider"></div>
+                <div class="adv-head">Advanced — optional overrides</div>
+                <p class="adv-note">These carry smart defaults (shown). Leaving them is the standard build.</p>
+
+                <div class="field" id="frontendField" style="margin-top:16px">
+                  <label class="lbl">Frontend</label>
+                  <select id="frontend" class="inp"></select>
+                </div>
+                <div class="field" id="frontendConsequence" style="display:none">
+                  <div class="hint">Frontend: <strong>None</strong> — API-only projects have no frontend (the project type sets it to None).</div>
+                </div>
+                <div class="field">
+                  <label class="lbl">Multi-user</label>
+                  <select id="multiUser" class="inp"><option value="true">Yes — multi-user ready</option><option value="false">No</option></select>
+                </div>
+                <div class="field">
+                  <label class="lbl">Authentication</label>
+                  <select id="auth" class="inp"></select>
+                </div>
+                <div class="field">
+                  <label class="lbl">Description <span class="hint" style="font-weight:400">(optional — appears in the README)</span></label>
+                  <textarea id="projectDescription" class="inp" rows="2" placeholder="e.g. A small ticket tracker for the support team."></textarea>
+                </div>
+
+                <div class="divider"></div>
+                <div class="adv-head">Framework + version pins</div>
+                <p class="adv-note">Concrete pins for the selected backend. Default = the version the standard build already implies (resolve-then-pin).</p>
+                <div id="versionPins" class="ver-grid" style="margin-top:12px"></div>
+
+                <div class="divider"></div>
+                <div class="adv-head">Coding style</div>
+                <div class="field" style="margin-top:12px">
+                  <label class="lbl">Naming convention</label>
+                  <select id="styleNaming" class="inp" onchange="onStyleChange()"></select>
+                  <div id="reasonNaming" class="hint"></div>
+                </div>
+                <div class="field">
+                  <label class="lbl">Formatting — indentation</label>
+                  <select id="styleIndent" class="inp" onchange="onStyleChange()"></select>
+                  <div id="reasonIndent" class="hint"></div>
+                </div>
+                <div class="field">
+                  <label class="lbl">Architecture depth</label>
+                  <select id="styleDepth" class="inp" onchange="onStyleChange()"></select>
+                  <div id="reasonDepth" class="hint"></div>
+                </div>
+
+                <div class="divider"></div>
+                <div class="adv-head">Integrations</div>
+                <div class="field" style="margin-top:12px">
+                  <label class="lbl">Email integration</label>
+                  <select id="intEmail" class="inp"><option value="none">None — no email</option><option value="smtp">SMTP — wire a mailer the app can call</option></select>
+                </div>
+                <div class="field">
+                  <label class="lbl">AI hook</label>
+                  <select id="intAi" class="inp"><option value="none">None — no AI hook</option><option value="hook">Hook — expose an optional /api/ai endpoint</option></select>
+                </div>
               </div>
-              <div class="field">
-                <label class="lbl">Authentication</label>
-                <select id="auth" class="inp"><option value="Simple login">Simple login</option><option value="None">None</option><option value="">(leave blank — use default)</option></select>
+
+              <div class="simple-note hint" style="margin-top:16px">
+                Frontend, multi-user, auth, version pins, coding style, and integrations use smart defaults. Switch to <strong>Advanced</strong> (top-right) to override them.
               </div>
               <div id="settingsDefaults" class="hint"></div>
             </div>
             <div class="card-foot">
               <div class="btn-row">
-                <button class="btn btn-secondary" onclick="loadDemoApp('teamtracker')">Load example</button>
-                <button class="btn btn-secondary" onclick="loadDemoApp()">Load Ticket demo</button>
-                <button class="btn btn-secondary" onclick="setSettings()">Set settings</button>
+                <button class="btn btn-secondary btn-sm" onclick="loadExample('teamtracker')">Load TeamTracker</button>
+                <button class="btn btn-secondary btn-sm" onclick="loadExample('demoapp')">Load Ticket demo</button>
               </div>
-              <button class="btn btn-primary" onclick="next1()">Next <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+              <button class="btn btn-primary" onclick="goTo(2)">Next <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- ── Screen 2: Define entities ─────────────────────────────────── -->
+      <!-- ── Screen 2: Entities ────────────────────────────────────────── -->
       <section class="screen" data-step="2">
         <div class="wrap wrap-1100">
           <div class="page-head">
             <h1>Define your entities</h1>
-            <p>Describe the things your app manages.</p>
+            <p>Describe the things your app manages. <span class="req-star">*</span> at least one entity is required.</p>
           </div>
           <div class="grid-2">
             <div class="card">
@@ -271,9 +356,8 @@
                 </div>
                 <div id="fields"></div>
                 <div class="divider"></div>
-                <!-- Day 19: belongs-to relationships (optional). Target = a
-                     PREVIOUSLY-added entity (the engine requires the target to
-                     exist earlier), so only prior entities are offered. -->
+                <!-- CONTEXTUAL: belongs-to appears only once a PRIOR entity exists
+                     (the engine requires the target to be defined earlier). -->
                 <div class="field">
                   <label class="lbl">Relationships <span class="hint" style="font-weight:400">(optional — belongs-to a previous entity)</span></label>
                   <div id="relRows"></div>
@@ -285,12 +369,15 @@
                   <button class="btn btn-secondary btn-sm" onclick="addFieldRow()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> Add field</button>
                   <button class="btn btn-primary" onclick="addEntity()">Add entity</button>
                 </div>
-                <div id="entityDefaults" class="hint" style="white-space:pre-wrap"></div>
               </div>
             </div>
             <div class="card">
-              <div class="panel-head"><span class="t">Project model</span><span class="b">JSON</span></div>
-              <pre id="state" class="code" style="min-height:280px">(no project yet)</pre>
+              <div class="panel-head"><span class="t">Entities</span><span class="b" id="entityCount">0</span></div>
+              <div class="card-body" style="padding:12px 16px">
+                <div id="entityList" class="muted-sm">No entities yet — add one on the left.</div>
+              </div>
+              <div class="panel-head" style="border-top:1px solid var(--line2)"><span class="t">Blueprint choices</span><span class="b">JSON</span></div>
+              <pre id="choicesJson" class="code" style="min-height:180px">(building…)</pre>
             </div>
           </div>
           <div class="foot-nav">
@@ -300,93 +387,28 @@
         </div>
       </section>
 
-      <!-- ── Screen 3: Coding style (Day 14) ───────────────────────────── -->
+      <!-- ── Screen 3: Blueprint ───────────────────────────────────────── -->
       <section class="screen" data-step="3">
-        <div class="wrap wrap-520">
-          <div class="page-head">
-            <h1>Choose your coding style</h1>
-            <p>Deterministic switches the generator applies exactly — same model + same style always produce the same code. Every default reproduces the standard output.</p>
-          </div>
-          <div class="card">
-            <div class="card-body">
-              <div class="field">
-                <label class="lbl">Naming convention</label>
-                <select id="styleNaming" class="inp" onchange="onStyleChange()">
-                  <option value="default">Default — each stack's idiom</option>
-                  <option value="camelCase">camelCase</option>
-                  <option value="snake_case">snake_case</option>
-                </select>
-                <div id="reasonNaming" class="hint"></div>
-              </div>
-              <div class="field">
-                <label class="lbl">Formatting — indentation</label>
-                <select id="styleIndent" class="inp" onchange="onStyleChange()">
-                  <option value="default">Default — each stack's idiom</option>
-                  <option value="two-space">Two spaces</option>
-                  <option value="four-space">Four spaces</option>
-                  <option value="tab">Tab</option>
-                </select>
-                <div id="reasonIndent" class="hint"></div>
-              </div>
-              <div class="field">
-                <label class="lbl">Architecture depth</label>
-                <select id="styleDepth" class="inp" onchange="onStyleChange()">
-                  <option value="default">Default — layered (controller / service / repository)</option>
-                  <option value="simple">Simple — flatter (fewer layers, one CRUD module)</option>
-                </select>
-                <div id="reasonDepth" class="hint"></div>
-              </div>
-              <div class="divider"></div>
-              <!-- Day 19: wire the EXISTING Days-17/18 integrations to the UI. A
-                   neutral selection (default none = literal bypass → hashes frozen). -->
-              <div class="field">
-                <label class="lbl">Email integration <span class="hint" style="font-weight:400">(optional)</span></label>
-                <select id="intEmail" class="inp" onchange="onIntegrationsChange()">
-                  <option value="none">None — no email</option>
-                  <option value="smtp">SMTP — wire a mailer the app can call</option>
-                </select>
-              </div>
-              <div class="field">
-                <label class="lbl">AI hook <span class="hint" style="font-weight:400">(optional)</span></label>
-                <select id="intAi" class="inp" onchange="onIntegrationsChange()">
-                  <option value="none">None — no AI hook</option>
-                  <option value="hook">Hook — expose an optional /api/ai endpoint</option>
-                </select>
-              </div>
-              <div id="intSummary" class="hint"></div>
-              <div class="divider"></div>
-              <div id="styleSummary" class="hint"></div>
-            </div>
-          </div>
-          <div class="foot-nav">
-            <button class="btn btn-secondary" onclick="goTo(2)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg> Back</button>
-            <button class="btn btn-primary" onclick="nextStyle()">Next <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
-          </div>
-        </div>
-      </section>
-
-      <!-- ── Screen 4: Blueprint ───────────────────────────────────────── -->
-      <section class="screen" data-step="4">
         <div class="wrap wrap-1100">
           <div class="page-head">
             <h1>Your app blueprint</h1>
-            <p>Here&#39;s what will be built.</p>
+            <p>Assembled through the canonical <code>assembleBlueprint</code> path — byte-identical to the CLI.</p>
           </div>
-          <div id="blueprint"><div class="bp-empty">No project yet — set settings or load the example.</div></div>
+          <div id="blueprint"><div class="card"><div class="bp-empty">No project yet — set settings or load an example.</div></div></div>
           <details class="prev">
             <summary>Preview generation (dry run — writes nothing)</summary>
             <div class="btn-row" style="margin-top:10px"><button class="btn btn-secondary btn-sm" onclick="preview()">See preview</button></div>
             <pre id="preview" class="code" style="border:1px solid var(--line);border-radius:8px">(no preview yet)</pre>
           </details>
           <div class="foot-nav">
-            <button class="btn btn-secondary" onclick="goTo(3)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg> Back</button>
+            <button class="btn btn-secondary" onclick="goTo(2)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg> Back</button>
             <button class="btn btn-primary" onclick="generateAndNext()"><svg class="ic" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg> Generate project</button>
           </div>
         </div>
       </section>
 
-      <!-- ── Screen 5: Generated project ───────────────────────────────── -->
-      <section class="screen" data-step="5">
+      <!-- ── Screen 4: Generated project ───────────────────────────────── -->
+      <section class="screen" data-step="4">
         <div class="wrap wrap-1100">
           <div class="page-head"><h1>Your project is generated</h1><p>Browse your real, working code.</p></div>
           <div class="banner">
@@ -417,7 +439,7 @@
             </div>
           </div>
           <div class="foot-nav">
-            <button class="btn btn-secondary" onclick="goTo(4)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg> Back</button>
+            <button class="btn btn-secondary" onclick="goTo(3)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg> Back</button>
             <button class="btn btn-primary" disabled title="Download / open — future work (not part of this task)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg> Download / Open project</button>
           </div>
         </div>
@@ -425,8 +447,10 @@
     </main>
 
     <script>
-      // ── status + HTTP (unchanged engine wiring) ──────────────────────────
+      // ── status + HTTP ─────────────────────────────────────────────────────
       const log = (msg, cls) => { const el = document.getElementById('log'); el.className = cls || ''; el.textContent = msg; };
+      const $ = (id) => document.getElementById(id);
+      const val = (id) => { const el = $(id); return el ? el.value : ''; };
 
       async function api(method, path, body) {
         const res = await fetch(path, {
@@ -439,7 +463,343 @@
         return data;
       }
 
-      // ── wizard navigation (front-end state only; no engine calls) ────────
+      // ── The option set (Day 11 + Day 13) — populated from /api/options ────
+      // options = { optionSet, defaults, advisories, defaultVersions, profileId }.
+      // Profile-ABSENT ⇒ the full set + existing defaults + no advisories (the wizard's
+      // simple path is then the literal bypass). Enforcement stays wizard-side.
+      let options = null;
+      const FALLBACK_OPTIONS = {
+        optionSet: {
+          projectType: ['Web App', 'API-only'], backend: ['Spring Boot', 'Express', 'FastAPI', 'Django', 'Go'],
+          frontend: ['React', 'None'], database: ['PostgreSQL', 'MySQL'], multiUser: ['true', 'false'], auth: ['Simple login'],
+          'style.indent': ['default', 'two-space', 'four-space', 'tab'], 'style.namingConvention': ['default', 'camelCase', 'snake_case'], 'style.architectureDepth': ['default', 'simple'],
+        },
+        defaults: { multiUser: 'true', auth: 'Simple login' },
+        advisories: [],
+        defaultVersions: { 'Spring Boot': { java: '21', springBoot: '3.3.5', node: '22' }, Express: { node: '22', express: '4.21.2' }, FastAPI: { python: '3.12', fastapi: '0.115.6' }, Django: { python: '3.12', django: '5.1.4' }, Go: { go: '1.22' } },
+        profileId: null,
+      };
+
+      function fillSelect(id, values, labeler) {
+        const sel = $(id); if (!sel || !values) return;
+        sel.innerHTML = values.map((v) => `<option value="${v}">${labeler ? labeler(v) : v}</option>`).join('');
+      }
+
+      function applyOptions(o) {
+        options = o;
+        const os = o.optionSet || {};
+        fillSelect('projectType', os.projectType);
+        fillSelect('backend', os.backend);
+        fillSelect('database', os.database);
+        fillSelect('frontend', os.frontend);
+        fillSelect('multiUser', os.multiUser, (v) => v === 'true' ? 'Yes — multi-user ready' : 'No');
+        // auth: the option set + an explicit "leave blank" (engine applies+shows the default).
+        const authVals = os.auth || ['Simple login'];
+        $('auth').innerHTML = authVals.map((v) => `<option value="${v}">${v}</option>`).join('') + '<option value="">(leave blank — use default)</option>';
+        fillSelect('styleNaming', os['style.namingConvention'], styleLabel);
+        fillSelect('styleIndent', os['style.indent'], styleLabel);
+        fillSelect('styleDepth', os['style.architectureDepth'], styleLabel);
+        // Pre-select the effective defaults (ADR-004 — shown, not silent). The backbone
+        // dimensions have no built-in engine default (they are mandatory), but the wizard
+        // shows TODAY'S IMPLIED values so simple-mode + accept-defaults = the current default
+        // blueprint (the literal-bypass UX). An org-profile forceDefault overrides the implied
+        // value; a ban that removes the implied value falls back to the first surviving option.
+        // NOTE: applyProfile SORTS option values, so we must pre-select explicitly — never rely
+        // on select order.
+        const d = o.defaults || {};
+        const IMPLIED = { projectType: 'Web App', backend: 'Spring Boot', database: 'PostgreSQL', frontend: 'React' };
+        const preselect = (id, dim) => {
+          const os = (o.optionSet || {})[dim] || [];
+          const want = d[dim] || IMPLIED[dim];
+          setIf(id, os.includes(want) ? want : (os[0] != null ? os[0] : want));
+        };
+        preselect('projectType', 'projectType'); preselect('backend', 'backend'); preselect('database', 'database'); preselect('frontend', 'frontend');
+        setIf('multiUser', d.multiUser); setIf('auth', d.auth);
+        setIf('styleNaming', d['style.namingConvention']); setIf('styleIndent', d['style.indent']); setIf('styleDepth', d['style.architectureDepth']);
+        renderPolicy(o);
+        onTypeChange();
+        onBackendChange();
+      }
+      function setIf(id, v) { if (v == null) return; const el = $(id); if (!el) return; if ([...el.options].some((o) => o.value === String(v))) el.value = String(v); }
+      function styleLabel(v) {
+        return ({ default: 'Default — each stack’s idiom', 'two-space': 'Two spaces', 'four-space': 'Four spaces', tab: 'Tab', camelCase: 'camelCase', snake_case: 'snake_case', simple: 'Simple — flatter (one CRUD module)' })[v] || v;
+      }
+
+      // Org-policy banner: forced defaults + soft advisories (Day 13). None ⇒ a quiet note.
+      function renderPolicy(o) {
+        const el = $('policyBanner');
+        const adv = o.advisories || [];
+        const forced = Object.entries(o.defaults || {}).filter(([k]) => !['multiUser', 'auth'].includes(k)); // org-forced beyond the built-ins
+        if (!o.profileId && adv.length === 0) { el.style.display = 'none'; return; }
+        el.style.display = '';
+        el.className = adv.length ? 'policy' : 'policy none';
+        let html = `<div class="t">Org policy${o.profileId ? ' · ' + o.profileId : ''}</div><ul>`;
+        for (const [k, v] of forced) html += `<li>Default set by policy: <strong>${k}</strong> = ${v}</li>`;
+        for (const a of adv) html += `<li>Advisory (soft): ${a.message}</li>`;
+        if (forced.length === 0 && adv.length === 0) html += '<li>No restrictions — the full option set is available.</li>';
+        html += '</ul>';
+        el.innerHTML = html;
+      }
+
+      // ── Version pins (Day 11): per-backend concrete pins ──────────────────
+      // Default = the current-implied pin (so simple-mode leaves them ⇒ literal bypass).
+      // A profile allow-list (>1 option) becomes a select; a single forced value LOCKS it.
+      function renderVersionPins(backend) {
+        const host = $('versionPins'); if (!host) return;
+        const dv = (options && options.defaultVersions) || FALLBACK_OPTIONS.defaultVersions;
+        const os = (options && options.optionSet) || {};
+        const defs = (options && options.defaults) || {};
+        const keys = Object.keys(dv[backend] || {});
+        host.innerHTML = '';
+        for (const key of keys) {
+          const dim = 'versions.' + key;
+          const allowed = os[dim]; // present only when the profile expressed a version rule
+          const forced = defs[dim];
+          const def = forced || (dv[backend] || {})[key];
+          const item = document.createElement('div'); item.className = 'ver-item';
+          const lbl = document.createElement('label'); lbl.className = 'lbl'; lbl.textContent = key;
+          item.appendChild(lbl);
+          if (allowed && allowed.length > 1) {
+            const sel = document.createElement('select'); sel.className = 'inp ver-input'; sel.dataset.key = key;
+            sel.innerHTML = allowed.map((v) => `<option value="${v}">${v}</option>`).join('');
+            sel.value = def; item.appendChild(sel);
+          } else if (allowed && allowed.length === 1) {
+            const inp = document.createElement('input'); inp.className = 'inp mono ver-input'; inp.dataset.key = key; inp.value = allowed[0]; inp.disabled = true;
+            item.appendChild(inp);
+            const note = document.createElement('div'); note.className = 'lock-note'; note.textContent = 'Locked by org policy (hard).'; item.appendChild(note);
+          } else {
+            const inp = document.createElement('input'); inp.className = 'inp mono ver-input'; inp.dataset.key = key; inp.value = def;
+            item.appendChild(inp);
+          }
+          host.appendChild(item);
+        }
+      }
+
+      // ── Simple/Advanced mode (persisted; UI-only, never in the blueprint) ─
+      function setMode(mode) {
+        const adv = mode === 'advanced';
+        document.body.classList.toggle('mode-advanced', adv);
+        $('modeSimple').classList.toggle('on', !adv);
+        $('modeAdvanced').classList.toggle('on', adv);
+        try { localStorage.setItem('thraksha.mode', mode); } catch (e) { /* storage may be blocked; UI still works */ }
+      }
+      function initMode() {
+        let mode = 'simple';
+        try { mode = localStorage.getItem('thraksha.mode') || 'simple'; } catch (e) { /* ignore */ }
+        setMode(mode === 'advanced' ? 'advanced' : 'simple');
+      }
+
+      // ── contextual reveals on Screen 1 ────────────────────────────────────
+      function onTypeChange() {
+        const apiOnly = val('projectType') === 'API-only';
+        $('frontendField').style.display = apiOnly ? 'none' : '';
+        $('frontendConsequence').style.display = apiOnly ? '' : 'none';
+      }
+      function onBackendChange() {
+        renderVersionPins(val('backend'));
+        applyStyleGating(val('backend'));
+      }
+
+      // ── coding-style applicability gating (front-end knowledge, not kernel) ─
+      const STYLE_APPLIES = {
+        indent: { backends: ['Express'], reason: 'Indentation formatting currently affects Express .js only.' },
+        depth: { backends: ['Express', 'FastAPI'], reason: 'Layered structure only for this stack (simple: Express/FastAPI).' },
+      };
+      function gateControl(selectId, nonDefaultValues, applicable, reasonId, reasonText) {
+        const sel = $(selectId); if (!sel) return;
+        for (const opt of sel.options) if (nonDefaultValues.includes(opt.value)) opt.disabled = !applicable;
+        const reasonEl = $(reasonId);
+        if (!applicable) { if (nonDefaultValues.includes(sel.value)) sel.value = 'default'; if (reasonEl) reasonEl.textContent = reasonText; }
+        else if (reasonEl) reasonEl.textContent = '';
+      }
+      function applyStyleGating(backend) {
+        if ($('reasonNaming')) $('reasonNaming').textContent = '';
+        gateControl('styleIndent', ['two-space', 'four-space', 'tab'], STYLE_APPLIES.indent.backends.includes(backend), 'reasonIndent', STYLE_APPLIES.indent.reason);
+        gateControl('styleDepth', ['simple'], STYLE_APPLIES.depth.backends.includes(backend), 'reasonDepth', STYLE_APPLIES.depth.reason);
+      }
+      function onStyleChange() { renderChoices(); }
+
+      // ── Entities (client-side; the canonical addEntity happens in assembleBlueprint) ─
+      const TYPES = ['String', 'Text', 'Integer', 'Long', 'Decimal', 'Boolean', 'Date', 'DateTime'];
+      let entities = []; // [{ name, fields:[{name,type,required,unique}], relationships:[{kind:'belongs-to',target}] }]
+
+      function addFieldRow(name, type) {
+        const div = document.createElement('div');
+        div.className = 'field-row';
+        div.innerHTML =
+          '<input class="f-name inp mono" placeholder="field_name" />' +
+          '<select class="f-type inp">' + TYPES.map((t) => `<option ${t === type ? 'selected' : ''}>${t}</option>`).join('') + '</select>' +
+          '<label class="ck"><input type="checkbox" class="f-req" /></label>' +
+          '<label class="ck"><input type="checkbox" class="f-uniq" /></label>' +
+          '<button class="icon-btn danger" title="Remove" onclick="this.closest(\'.field-row\').remove()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>';
+        if (name) div.querySelector('.f-name').value = name;
+        $('fields').appendChild(div);
+      }
+      // belongs-to targets = the entities already added (a target must precede — the engine enforces it).
+      function syncRelUI() {
+        const has = entities.length > 0;
+        $('addRelBtn').style.display = has ? '' : 'none';
+        $('relHint').style.display = has ? 'none' : '';
+        document.querySelectorAll('#relRows .rel-target').forEach((sel) => {
+          const cur = sel.value;
+          sel.innerHTML = entities.map((e) => `<option ${e.name === cur ? 'selected' : ''}>${e.name}</option>`).join('');
+        });
+      }
+      function addRelRow() {
+        if (entities.length === 0) return;
+        const div = document.createElement('div');
+        div.className = 'rel-row field-row';
+        div.innerHTML =
+          '<span class="mono" style="align-self:center">belongs-to</span>' +
+          '<select class="rel-target inp">' + entities.map((e) => `<option>${e.name}</option>`).join('') + '</select>' +
+          '<button class="icon-btn danger" title="Remove" onclick="this.closest(\'.rel-row\').remove()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>';
+        $('relRows').appendChild(div);
+      }
+      function addEntity() {
+        const name = val('entityName').trim();
+        if (!name) { log('Entity needs a name.', 'err'); return; }
+        if (entities.some((e) => e.name === name)) { log(`Entity "${name}" already exists.`, 'err'); return; }
+        const fields = [...document.querySelectorAll('#fields .field-row')].map((r) => ({
+          name: r.querySelector('.f-name').value.trim(),
+          type: r.querySelector('.f-type').value,
+          required: r.querySelector('.f-req').checked,
+          unique: r.querySelector('.f-uniq').checked,
+        })).filter((f) => f.name);
+        if (fields.length === 0) { log('Add at least one field.', 'err'); return; }
+        const relationships = [...document.querySelectorAll('#relRows .rel-row')]
+          .map((r) => ({ kind: 'belongs-to', target: r.querySelector('.rel-target').value }))
+          .filter((rel) => rel.target);
+        const ent = { name, fields };
+        if (relationships.length > 0) ent.relationships = relationships;
+        entities.push(ent);
+        // reset the form for the next entity
+        $('entityName').value = '';
+        $('fields').innerHTML = ''; addFieldRow();
+        $('relRows').innerHTML = '';
+        renderEntities();
+        log(`Entity "${name}" added.`, 'ok');
+      }
+      function removeEntity(i) { entities.splice(i, 1); renderEntities(); }
+      function renderEntities() {
+        const host = $('entityList');
+        $('entityCount').textContent = String(entities.length);
+        if (entities.length === 0) { host.innerHTML = '<div class="muted-sm">No entities yet — add one on the left.</div>'; }
+        else {
+          host.innerHTML = '';
+          entities.forEach((e, i) => {
+            const rels = (e.relationships || []).map((r) => '→ ' + r.target).join(', ');
+            const pill = document.createElement('div'); pill.className = 'entity-pill';
+            pill.innerHTML = `<span class="n">${e.name}</span><span class="m">${e.fields.length} field${e.fields.length === 1 ? '' : 's'}${rels ? ' · ' + rels : ''}</span>`;
+            const del = document.createElement('button'); del.className = 'icon-btn danger'; del.title = 'Remove'; del.onclick = () => removeEntity(i);
+            del.innerHTML = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>';
+            pill.appendChild(del); host.appendChild(pill);
+          });
+        }
+        syncRelUI();
+        renderChoices();
+      }
+
+      // ── Build the ONE canonical BlueprintChoices (concrete values only) ───
+      // The literal-bypass guarantee: any optional dimension left at its default is
+      // OMITTED, so assembleBlueprint takes no setter and reproduces the default state.
+      function buildChoices() {
+        const projectType = val('projectType');
+        const backend = val('backend');
+        const settings = {
+          projectName: val('projectName'),
+          projectType,
+          backend,
+          // API-only submits a non-None frontend so the model normalizes it to None AND
+          // records the ADR-004 default (the canonical api-only baseline); Web App uses the pick.
+          frontend: projectType === 'API-only' ? 'React' : (val('frontend') || 'React'),
+          database: val('database'),
+          multiUser: val('multiUser') === 'true',
+        };
+        const auth = val('auth');
+        if (auth) settings.auth = auth; // blank ⇒ the engine applies + shows the default
+
+        const choices = { settings, entities: entities.map((e) => JSON.parse(JSON.stringify(e))) };
+
+        const versions = collectVersions(backend);
+        if (versions) choices.versions = versions;
+        const style = collectStyle();
+        if (style) choices.style = style;
+        const integrations = collectIntegrations();
+        if (integrations) choices.integrations = integrations;
+        const description = val('projectDescription');
+        if (description && description.trim()) choices.description = description;
+        return choices;
+      }
+      function collectVersions(backend) {
+        const dv = (options && options.defaultVersions) || FALLBACK_OPTIONS.defaultVersions;
+        const defaults = dv[backend] || {};
+        const picked = {};
+        document.querySelectorAll('#versionPins .ver-input').forEach((el) => { picked[el.dataset.key] = el.value.trim(); });
+        // Non-default only ⇒ include; all-default ⇒ omit (the literal bypass).
+        let changed = false;
+        for (const k of Object.keys(defaults)) if ((picked[k] || defaults[k]) !== defaults[k]) changed = true;
+        if (!changed) return null;
+        const out = {};
+        for (const k of Object.keys(defaults)) out[k] = picked[k] || defaults[k];
+        return out;
+      }
+      function collectStyle() {
+        const s = { formatting: { indent: val('styleIndent') || 'default' }, namingConvention: val('styleNaming') || 'default', architectureDepth: val('styleDepth') || 'default' };
+        if (s.formatting.indent === 'default' && s.namingConvention === 'default' && s.architectureDepth === 'default') return null;
+        return s;
+      }
+      function collectIntegrations() {
+        const i = { email: val('intEmail') || 'none', ai: val('intAi') || 'none' };
+        if (i.email === 'none' && i.ai === 'none') return null;
+        return i;
+      }
+      function renderChoices() {
+        const el = $('choicesJson'); if (!el) return;
+        try { el.textContent = JSON.stringify(buildChoices(), null, 2); } catch (e) { el.textContent = '(incomplete)'; }
+      }
+
+      // ── The canonical assemble → POST /api/assemble (UI==CLI) ─────────────
+      let lastState = null;
+      async function assemble() {
+        const choices = buildChoices();
+        const d = await api('POST', '/api/assemble', choices);
+        lastState = d.state;
+        renderDefaults('settingsDefaults', d.defaultsApplied);
+        renderBlueprint(d.state);
+        return d.state;
+      }
+      function renderDefaults(elId, defaults) {
+        const el = $(elId); if (!el) return;
+        if (!defaults || defaults.length === 0) { el.textContent = ''; return; }
+        el.textContent = 'Defaults applied (shown, ADR-004): ' + defaults.map((x) => `${x.setting}=${x.value} (${x.reason})`).join('  |  ');
+      }
+
+      // ── examples (client-side presets → the exact demo choices) ───────────
+      function loadExample(which) {
+        setIf('projectType', 'Web App');
+        setIf('backend', 'Spring Boot'); onBackendChange();
+        setIf('database', 'PostgreSQL'); setIf('frontend', 'React'); setIf('multiUser', 'true'); setIf('auth', 'Simple login');
+        $('projectDescription').value = '';
+        if (which === 'teamtracker') {
+          $('projectName').value = 'TeamTracker';
+          entities = [
+            { name: 'Team', fields: [{ name: 'name', type: 'String', required: true, unique: false }, { name: 'description', type: 'String', required: false, unique: false }] },
+            { name: 'Application', fields: [{ name: 'name', type: 'String', required: true, unique: false }, { name: 'status', type: 'String', required: false, unique: false }], relationships: [{ kind: 'belongs-to', target: 'Team' }] },
+            { name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true, unique: false }, { name: 'code', type: 'String', required: false, unique: true }, { name: 'priority', type: 'Integer', required: false, unique: false }, { name: 'done', type: 'Boolean', required: false, unique: false }], relationships: [{ kind: 'belongs-to', target: 'Application' }, { kind: 'belongs-to', target: 'Team' }] },
+            { name: 'Comment', fields: [{ name: 'body', type: 'Text', required: true, unique: false }], relationships: [{ kind: 'belongs-to', target: 'Ticket' }] },
+          ];
+        } else {
+          $('projectName').value = 'DemoApp';
+          entities = [
+            { name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true, unique: false }, { name: 'code', type: 'String', required: false, unique: true }, { name: 'priority', type: 'Integer', required: false, unique: false }, { name: 'done', type: 'Boolean', required: false, unique: false }] },
+          ];
+        }
+        onTypeChange();
+        renderEntities();
+        log(`Loaded the ${which === 'teamtracker' ? 'TeamTracker' : 'Ticket'} example (${entities.length} entit${entities.length === 1 ? 'y' : 'ies'}).`, 'ok');
+      }
+
+      // ── wizard navigation ─────────────────────────────────────────────────
       let step = 1;
       function updateStepper() {
         document.querySelectorAll('.step').forEach((el) => {
@@ -451,182 +811,24 @@
             : n;
         });
       }
-      function goTo(n) {
+      async function goTo(n) {
+        // Entering the Blueprint screen assembles the model through the canonical path.
+        if (n === 3) {
+          try { await assemble(); } catch (e) { log(e.message, 'err'); return; }
+        }
         step = n;
         document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', Number(s.dataset.step) === n));
         updateStepper();
         window.scrollTo(0, 0);
-        // Refresh the destination screen's data from the real engine (read-only reads).
-        if (n === 2 || n === 4) refreshState();  // Entities view (2), Blueprint chips (4)
-        if (n === 3) enterStyleScreen();         // Style (3): read backend, gate, reflect current style
-        if (n === 5) { loadFiles(); listVersions(); }
+        if (n === 2) renderChoices();
+        if (n === 4) { loadFiles(); listVersions(); }
       }
 
-      // Screen-1 "Next": ensure a model exists (via the SAME /api/settings call), then advance.
-      let modelReady = false;
-      async function next1() {
-        if (!modelReady) { const ok = await setSettings(); if (!ok) return; }
-        goTo(2);
-      }
-
-      // ── model view (unchanged) ───────────────────────────────────────────
-      function showState(state) {
-        document.getElementById('state').textContent = state ? JSON.stringify(state, null, 2) : '(no project yet)';
-        renderBlueprint(state);
-      }
-      async function refreshState() {
-        try { const d = await api('GET', '/api/state'); showState(d.state); } catch (e) { log(e.message, 'err'); }
-      }
-
-      // ── Screen 1 → POST /api/settings  (unchanged endpoint) ──────────────
-      async function setSettings() {
-        try {
-          const projectType = document.getElementById('projectType').value;
-          const body = {
-            projectName: document.getElementById('projectName').value,
-            // Day 19: description is a neutral optional value (README-only when
-            // provided), sent alongside settings but NOT a Phase-A key server-side.
-            description: document.getElementById('projectDescription').value,
-            projectType,
-            backend: document.getElementById('backend').value,
-            // API-only projects have no frontend. We submit a non-None frontend ('React') so the
-            // model normalizes it to None AND RECORDS the ADR-004 default (defaultsApplied), which
-            // is the canonical api-only baseline (Day-15: 97aef817…). Submitting 'None' directly
-            // would skip the recorded-default line and produce the divergent sibling (1fc7f87c…).
-            frontend: projectType === 'API-only' ? 'React' : document.getElementById('frontend').value,
-            database: document.getElementById('database').value,
-            multiUser: document.getElementById('multiUser').value === 'true',
-          };
-          const auth = document.getElementById('auth').value;
-          if (auth) body.auth = auth; // blank => let the engine apply + show the default
-          const d = await api('POST', '/api/settings', body);
-          showState(d.state);
-          renderDefaults('settingsDefaults', d.defaultsApplied);
-          // Fresh project: no entities yet, so reset the belongs-to target list.
-          setAddedEntities([]);
-          document.getElementById('relRows').innerHTML = '';
-          modelReady = true;
-          log('Project settings set (createProjectModel).', 'ok');
-          return true;
-        } catch (e) { log(e.message, 'err'); return false; }
-      }
-
-      // Reflect the model's type↔frontend constraint (Day 16): API-only has no
-      // frontend, so HIDE the frontend question and show the forced-None as a
-      // stated consequence (ADR-004 — shown, not silent). The UI never displays a
-      // combination the model won't deliver (no visible API-only + React — the
-      // inverted Day-14 gating rule). Web App shows the frontend question normally.
-      function onTypeChange() {
-        const apiOnly = document.getElementById('projectType').value === 'API-only';
-        document.getElementById('frontendField').style.display = apiOnly ? 'none' : '';
-        document.getElementById('frontendConsequence').style.display = apiOnly ? '' : 'none';
-      }
-
-      // ── Screen 1 → POST /api/demoapp  (unchanged endpoint) ───────────────
-      async function loadDemoApp(example) {
-        try {
-          const d = await api('POST', '/api/demoapp' + (example ? '?example=' + encodeURIComponent(example) : ''));
-          showState(d.state);
-          renderDefaults('settingsDefaults', d.defaultsApplied);
-          // Reflect the loaded model in the form (display nicety; no endpoint change).
-          const p = d.state.phaseA;
-          for (const id of ['projectName','backend','frontend','database','auth']) { const el = document.getElementById(id); if (el && p[id] != null) el.value = p[id]; }
-          document.getElementById('multiUser').value = p.multiUser ? 'true' : 'false';
-          document.getElementById('projectDescription').value = d.state.description || '';
-          // Reflect the loaded example's entities so belongs-to targets are offered.
-          setAddedEntities((d.state.entities || []).map((e) => e.name));
-          document.getElementById('relRows').innerHTML = '';
-          modelReady = true;
-          log(`Loaded the ${p.projectName} example (${(d.state.entities || []).length} entit${(d.state.entities || []).length === 1 ? 'y' : 'ies'}).`, 'ok');
-        } catch (e) { log(e.message, 'err'); }
-      }
-
-      function renderDefaults(elId, defaults) {
-        const el = document.getElementById(elId);
-        if (!defaults || defaults.length === 0) { el.textContent = 'Defaults applied: (none — all values provided).'; return; }
-        el.textContent = 'Defaults applied (shown, ADR-004): ' + defaults.map((x) => `${x.setting}=${x.value} (${x.reason})`).join('  |  ');
-      }
-
-      // ── Screen 2 field rows (same classes the engine reader expects) ─────
-      const TYPES = ['String', 'Text', 'Integer', 'Long', 'Decimal', 'Boolean', 'Date', 'DateTime'];
-      function addFieldRow(name, type) {
-        const div = document.createElement('div');
-        div.className = 'field-row';
-        div.innerHTML =
-          '<input class="f-name inp mono" placeholder="field_name" />' +
-          '<select class="f-type inp">' + TYPES.map((t) => `<option ${t === type ? 'selected' : ''}>${t}</option>`).join('') + '</select>' +
-          '<label class="ck"><input type="checkbox" class="f-req" /></label>' +
-          '<label class="ck"><input type="checkbox" class="f-uniq" /></label>' +
-          '<button class="icon-btn danger" title="Remove" onclick="this.closest(\'.field-row\').remove()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>';
-        if (name) div.querySelector('.f-name').value = name;
-        document.getElementById('fields').appendChild(div);
-      }
-
-      // ── Screen 2 belongs-to relationships (Day 19) ───────────────────────
-      // The set of entities already added — a belongs-to target must exist first
-      // (the engine rejects forward references), so only these are offered. Kept
-      // in sync with the real model on every add / demo-load / reset.
-      let addedEntities = [];
-      function setAddedEntities(names) { addedEntities = names.slice(); syncRelUI(); }
-      // Enable the "Add belongs-to" button only once a prior entity exists; the
-      // hint explains why when none do (ADR-004 — the constraint is shown).
-      function syncRelUI() {
-        const has = addedEntities.length > 0;
-        document.getElementById('addRelBtn').style.display = has ? '' : 'none';
-        document.getElementById('relHint').style.display = has ? 'none' : '';
-        // Refresh options on any open rows (a newly added prior entity appears).
-        document.querySelectorAll('#relRows .rel-target').forEach((sel) => {
-          const cur = sel.value;
-          sel.innerHTML = addedEntities.map((n) => `<option ${n === cur ? 'selected' : ''}>${n}</option>`).join('');
-        });
-      }
-      function addRelRow() {
-        if (addedEntities.length === 0) return;
-        const div = document.createElement('div');
-        div.className = 'rel-row field-row';
-        div.innerHTML =
-          '<span class="mono" style="align-self:center">belongs-to</span>' +
-          '<select class="rel-target inp">' + addedEntities.map((n) => `<option>${n}</option>`).join('') + '</select>' +
-          '<button class="icon-btn danger" title="Remove" onclick="this.closest(\'.rel-row\').remove()"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button>';
-        document.getElementById('relRows').appendChild(div);
-      }
-
-      // ── Screen 2 → POST /api/entities (Day 19: now sends relationships too) ─
-      async function addEntity() {
-        try {
-          const fields = [...document.querySelectorAll('#fields .field-row')].map((r) => ({
-            name: r.querySelector('.f-name').value,
-            type: r.querySelector('.f-type').value,
-            required: r.querySelector('.f-req').checked,
-            unique: r.querySelector('.f-uniq').checked,
-          })).filter((f) => f.name);
-          // Build the relationships array in the EXACT shape the engine's
-          // RelationshipSpec expects ({ kind:'belongs-to', target }) — the same
-          // structure the demos set programmatically. Multiple belongs-to edges
-          // per entity are supported (e.g. Ticket belongs-to Application AND Team).
-          const relationships = [...document.querySelectorAll('#relRows .rel-row')]
-            .map((r) => ({ kind: 'belongs-to', target: r.querySelector('.rel-target').value }))
-            .filter((rel) => rel.target);
-          const name = document.getElementById('entityName').value;
-          const body = { name, fields };
-          if (relationships.length > 0) body.relationships = relationships; // omit when none (byte-identical bypass)
-          const d = await api('POST', '/api/entities', body);
-          showState(d.state);
-          document.getElementById('entityDefaults').textContent =
-            'Field rules (defaults shown, ADR-004):\n  ' + d.addedDefaults.join('\n  ');
-          // The add succeeded: this entity can now be a belongs-to target for later
-          // ones. Reflect the real model's entity list (authoritative order).
-          setAddedEntities((d.state.entities || []).map((e) => e.name));
-          document.getElementById('relRows').innerHTML = ''; // clear for the next entity
-          log('Entity added (model.addEntity).', 'ok');
-        } catch (e) { log(e.message, 'err'); }
-      }
-
-      // ── Screen 3 → GET /api/preview, POST /api/generate  (unchanged) ─────
+      // ── preview / generate → /api/preview, /api/generate ──────────────────
       async function preview() {
         try {
           const d = await api('GET', '/api/preview');
-          document.getElementById('preview').textContent = d.text;
+          $('preview').textContent = d.text;
           log('Preview computed (buildFileSet + computePlan + renderPreview) — nothing written.', 'ok');
         } catch (e) { log(e.message, 'err'); }
       }
@@ -634,132 +836,21 @@
         try {
           const d = await api('POST', '/api/generate');
           const o = d.outcome;
-          document.getElementById('genMsg').textContent =
+          $('genMsg').textContent =
             `Generated at ${d.projectDir} — created ${o.created.length}, changed ${o.changed.length}, unchanged ${o.unchanged.length}; ` +
             `developer files created-once ${o.developerCreated.length}, untouched ${o.developerUntouched.length}.`;
-          document.getElementById('preview').textContent =
-            `Generated at ${d.projectDir}\nThraksha: created ${o.created.length}, changed ${o.changed.length}, unchanged ${o.unchanged.length}\n` +
-            `Developer files: created-once ${o.developerCreated.length}, untouched ${o.developerUntouched.length}`;
           log('Generated (applyPlan) — developer files preserved.', 'ok');
           await loadFiles();
           return true;
         } catch (e) { log(e.message, 'err'); return false; }
       }
-      async function generateAndNext() { if (await generate()) goTo(5); }
+      async function generateAndNext() { if (await generate()) goTo(4); }
 
-      // ── Screen 3: Coding style (Day 14) → POST /api/style ────────────────
-      // Applicability is FRONT-END/composition knowledge (the same tier as the
-      // backend option list) — NOT kernel logic. The core stays neutral: setStyle
-      // accepts any value; an inapplicable value is a harmless no-op at that
-      // stack's plugin. The UI's job is to tell the truth about what will be
-      // delivered (ADR-004 shown-not-hidden), so it disables what a stack won't do.
-      const STYLE_APPLIES = {
-        // naming: all 5 backends (no gating).
-        indent: { backends: ['Express'], reason: 'Indentation formatting currently affects Express .js only.' },
-        depth:  { backends: ['Express', 'FastAPI'], reason: 'Layered structure only for this stack (simple: Express/FastAPI).' },
-      };
-
-      // Disable the non-default option values of a control when the backend does
-      // not support them, pin the control to 'default', and show the reason.
-      function gateControl(selectId, nonDefaultValues, applicable, reasonId, reasonText) {
-        const sel = document.getElementById(selectId);
-        for (const opt of sel.options) {
-          if (nonDefaultValues.includes(opt.value)) opt.disabled = !applicable;
-        }
-        const reasonEl = document.getElementById(reasonId);
-        if (!applicable) {
-          if (nonDefaultValues.includes(sel.value)) sel.value = 'default'; // never over-claim
-          reasonEl.textContent = reasonText;
-        } else {
-          reasonEl.textContent = '';
-        }
-      }
-
-      function applyStyleGating(backend) {
-        // naming applies to all 5 — nothing to gate.
-        document.getElementById('reasonNaming').textContent = '';
-        gateControl('styleIndent', ['two-space', 'four-space', 'tab'],
-          STYLE_APPLIES.indent.backends.includes(backend), 'reasonIndent', STYLE_APPLIES.indent.reason);
-        gateControl('styleDepth', ['simple'],
-          STYLE_APPLIES.depth.backends.includes(backend), 'reasonDepth', STYLE_APPLIES.depth.reason);
-      }
-
-      function currentStyleBody() {
-        return {
-          formatting: { indent: document.getElementById('styleIndent').value },
-          namingConvention: document.getElementById('styleNaming').value,
-          architectureDepth: document.getElementById('styleDepth').value,
-        };
-      }
-
-      function updateStyleSummary() {
-        const b = currentStyleBody();
-        document.getElementById('styleSummary').textContent =
-          `Selected style (shown, ADR-004): naming=${b.namingConvention}, indent=${b.formatting.indent}, architecture=${b.architectureDepth}. ` +
-          `Each 'default' reproduces the standard output.`;
-      }
-
-      // POST the FULL CodingStyle (unset controls = 'default', always complete).
-      async function postStyle() {
-        try {
-          const d = await api('POST', '/api/style', currentStyleBody());
-          showState(d.state);       // getState() includes style — ADR-004 visible
-          updateStyleSummary();
-          return true;
-        } catch (e) { log(e.message, 'err'); return false; }
-      }
-
-      async function onStyleChange() { await postStyle(); }
-
-      // ── Screen 3 → POST /api/integrations (Day 19, neutral pass-through) ───
-      // Send the FULL Integrations value (both members always present; default
-      // 'none' = a literal bypass). The server hands it opaquely to the model.
-      async function postIntegrations() {
-        try {
-          const body = {
-            email: document.getElementById('intEmail').value,
-            ai: document.getElementById('intAi').value,
-          };
-          const d = await api('POST', '/api/integrations', body);
-          showState(d.state); // getState() includes integrations — ADR-004 visible
-          const i = d.state.integrations || {};
-          document.getElementById('intSummary').textContent =
-            `Selected integrations (shown, ADR-004): email=${i.email}, ai=${i.ai}. 'none' reproduces the standard output.`;
-          return true;
-        } catch (e) { log(e.message, 'err'); return false; }
-      }
-      async function onIntegrationsChange() { await postIntegrations(); }
-
-      // On entry: read the current backend, reflect the model's current style into
-      // the controls, gate per the backend (resetting anything now-inapplicable),
-      // then sync the (possibly reset) style back to the model.
-      async function enterStyleScreen() {
-        let st = null;
-        try { const d = await api('GET', '/api/state'); st = d.state; showState(st); }
-        catch (e) { log(e.message, 'err'); return; }
-        const backend = (st && st.phaseA && st.phaseA.backend) || 'Express';
-        const s = (st && st.style) || {};
-        document.getElementById('styleNaming').value = s.namingConvention || 'default';
-        document.getElementById('styleIndent').value = (s.formatting && s.formatting.indent) || 'default';
-        document.getElementById('styleDepth').value = s.architectureDepth || 'default';
-        // Day 19: reflect the model's current integrations into the selects.
-        const integ = (st && st.integrations) || {};
-        document.getElementById('intEmail').value = integ.email || 'none';
-        document.getElementById('intAi').value = integ.ai || 'none';
-        applyStyleGating(backend);   // disable + reset non-applicable, set reasons
-        await postStyle();           // sync whatever is now selected (default for a fresh flow)
-        await postIntegrations();    // sync integrations too (default none for a fresh flow)
-        log(`Coding style ready for ${backend} — non-applicable options are disabled and shown.`, 'ok');
-      }
-
-      async function nextStyle() { if (await postStyle()) goTo(4); }
-
-      // ── Screen 4 read-only file viewer → GET /api/files, /api/file ───────
+      // ── read-only file viewer → /api/files, /api/file ─────────────────────
       async function loadFiles() {
         try {
           const d = await api('GET', '/api/files');
-          const info = document.getElementById('viewerInfo');
-          const tree = document.getElementById('fileTree');
+          const info = $('viewerInfo'); const tree = $('fileTree');
           if (!d.generated || d.tree.length === 0) { tree.textContent = '(no generated project yet — generate first)'; info.textContent = ''; return; }
           info.textContent = `${d.projectName} · ${countFiles(d.tree)} files`;
           tree.innerHTML = '';
@@ -772,20 +863,16 @@
       const IC_FILE = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v4h4"/></svg>';
       function renderNode(node) {
         if (node.type === 'dir') {
-          const wrap = document.createElement('div');
-          wrap.className = 'tree-item';
-          const label = document.createElement('div');
-          label.className = 'tree-label';
+          const wrap = document.createElement('div'); wrap.className = 'tree-item';
+          const label = document.createElement('div'); label.className = 'tree-label';
           label.innerHTML = IC_FOLDER + '<span>' + node.name + '</span>';
-          const children = document.createElement('div');
-          children.className = 'tree-children';
+          const children = document.createElement('div'); children.className = 'tree-children';
           for (const c of node.children || []) children.appendChild(renderNode(c));
           label.onclick = () => { children.style.display = children.style.display === 'none' ? '' : 'none'; };
           wrap.appendChild(label); wrap.appendChild(children);
           return wrap;
         }
-        const el = document.createElement('div');
-        el.className = 'tree-file';
+        const el = document.createElement('div'); el.className = 'tree-file';
         el.innerHTML = IC_FILE + '<span></span>';
         el.querySelector('span').textContent = node.name;
         el.title = node.relPath;
@@ -795,69 +882,50 @@
       async function openFile(relPath, el) {
         try {
           const d = await api('GET', '/api/file?path=' + encodeURIComponent(relPath));
-          document.getElementById('filePath').innerHTML = IC_FILE + '<span></span>';
-          document.getElementById('filePath').querySelector('span').textContent = d.path;
-          document.getElementById('fileContent').textContent = d.content; // textContent = no HTML injection
+          $('filePath').innerHTML = IC_FILE + '<span></span>';
+          $('filePath').querySelector('span').textContent = d.path;
+          $('fileContent').textContent = d.content; // textContent = no HTML injection
           document.querySelectorAll('.tree-file.active').forEach((x) => x.classList.remove('active'));
           if (el) el.classList.add('active');
         } catch (e) { log(e.message, 'err'); }
       }
 
-      // ── Screen 4 versions → save / list / rollback  (unchanged) ──────────
+      // ── versions → save / list / rollback ─────────────────────────────────
       async function saveVersion() {
-        try {
-          const ref = await api('POST', '/api/versions/save', { note: document.getElementById('note').value });
-          log(`Saved version v${ref.version}: ${ref.note}`, 'ok');
-          await listVersions();
-        } catch (e) { log(e.message, 'err'); }
+        try { const ref = await api('POST', '/api/versions/save', { note: val('note') }); log(`Saved version v${ref.version}: ${ref.note}`, 'ok'); await listVersions(); }
+        catch (e) { log(e.message, 'err'); }
       }
       async function listVersions() {
         try {
           const idx = await api('GET', '/api/versions');
-          document.getElementById('versions').textContent = idx.versions.length === 0
-            ? '(no versions yet)'
+          $('versions').textContent = idx.versions.length === 0 ? '(no versions yet)'
             : idx.versions.map((v) => `${v.version === idx.head ? '● ' : '○ '}v${v.version}: ${v.note}`).join('\n');
         } catch (e) { log(e.message, 'err'); }
       }
       async function rollback() {
         try {
-          const version = Number(document.getElementById('rollbackN').value);
+          const version = Number(val('rollbackN'));
           const d = await api('POST', '/api/versions/rollback', { version });
-          showState(d.state);
+          renderBlueprint(d.state);
           const r = d.result;
-          log(`Rolled back v${r.from} -> v${r.to}: changed ${r.outcome.changed.length}, unchanged ${r.outcome.unchanged.length}, ` +
-              `removed ${r.orphansRemoved.length}; developer files untouched ${r.outcome.developerUntouched.length}.`, 'ok');
-          await listVersions();
-          await loadFiles();
+          log(`Rolled back v${r.from} -> v${r.to}: changed ${r.outcome.changed.length}, unchanged ${r.outcome.unchanged.length}, removed ${r.orphansRemoved.length}.`, 'ok');
+          await listVersions(); await loadFiles();
         } catch (e) { log(e.message, 'err'); }
       }
 
-      // ── Read-only blueprint: draw the current Project Model ──────────────
+      // ── blueprint render (from the assembled ProjectState) ────────────────
       const SVGNS = 'http://www.w3.org/2000/svg';
       const BP_COLORS = [
-        { bar: '#2563eb', bg: '#eff6ff', text: '#1d4ed8' },
-        { bar: '#7c3aed', bg: '#f5f3ff', text: '#6d28d9' },
-        { bar: '#0891b2', bg: '#ecfeff', text: '#0e7490' },
-        { bar: '#059669', bg: '#f0fdf4', text: '#047857' },
+        { bar: '#2563eb', bg: '#eff6ff', text: '#1d4ed8' }, { bar: '#7c3aed', bg: '#f5f3ff', text: '#6d28d9' },
+        { bar: '#0891b2', bg: '#ecfeff', text: '#0e7490' }, { bar: '#059669', bg: '#f0fdf4', text: '#047857' },
       ];
-      function relTarget(rel) {
-        if (typeof rel === 'string') return rel;
-        if (rel && typeof rel === 'object') return rel.target || rel.to || rel.entity || rel.name || null;
-        return null;
-      }
+      function relTarget(rel) { if (typeof rel === 'string') return rel; if (rel && typeof rel === 'object') return rel.target || rel.to || rel.entity || rel.name || null; return null; }
       function entityBox(entity, multiUser, idx) {
         const c = BP_COLORS[idx % BP_COLORS.length];
-        const box = document.createElement('div');
-        box.className = 'bp-entity';
-        box.dataset.entity = entity.name;
-        const head = document.createElement('div');
-        head.className = 'bp-entity-name';
-        head.style.background = c.bar;
-        head.textContent = entity.name;
-        box.appendChild(head);
+        const box = document.createElement('div'); box.className = 'bp-entity'; box.dataset.entity = entity.name;
+        const head = document.createElement('div'); head.className = 'bp-entity-name'; head.style.background = c.bar; head.textContent = entity.name; box.appendChild(head);
         for (const f of entity.fields || []) {
-          const row = document.createElement('div');
-          row.className = 'bp-field';
+          const row = document.createElement('div'); row.className = 'bp-field';
           const name = document.createElement('span'); name.className = 'bp-field-name'; name.textContent = f.name;
           const right = document.createElement('span'); right.className = 'bp-field-right';
           const type = document.createElement('span'); type.className = 'bp-field-type'; type.textContent = f.type; right.appendChild(type);
@@ -865,46 +933,34 @@
           if (f.unique) { const b = document.createElement('span'); b.className = 'bp-badge uniq'; b.textContent = 'UNIQUE'; right.appendChild(b); }
           row.appendChild(name); row.appendChild(right); box.appendChild(row);
         }
-        const auto = document.createElement('div');
-        auto.className = 'bp-auto';
+        const auto = document.createElement('div'); auto.className = 'bp-auto';
         auto.textContent = '+ id, created_at, updated_at' + (multiUser ? ', owner' : '') + ' — added automatically';
         box.appendChild(auto);
         return box;
       }
       function renderBlueprint(state) {
-        const host = document.getElementById('blueprint');
-        if (!host) return;
+        const host = $('blueprint'); if (!host) return;
         host.innerHTML = '';
-        if (!state) { host.innerHTML = '<div class="card"><div class="bp-empty">No project yet — set settings or load the example.</div></div>'; return; }
+        if (!state) { host.innerHTML = '<div class="card"><div class="bp-empty">No project yet — set settings or load an example.</div></div>'; return; }
         const p = state.phaseA;
-        const summary = document.createElement('div');
-        summary.className = 'card bp-summary';
-        summary.innerHTML =
-          `<span class="bp-name">${p.projectName}</span><span class="bp-dot">·</span><span class="bp-type">${p.projectType}</span>` +
-          `<span class="bp-vsep"></span>`;
+        const summary = document.createElement('div'); summary.className = 'card bp-summary';
+        summary.innerHTML = `<span class="bp-name">${p.projectName}</span><span class="bp-dot">·</span><span class="bp-type">${p.projectType}</span><span class="bp-vsep"></span>`;
         const chips = document.createElement('div'); chips.className = 'bp-chips';
-        // Chosen coding style (Day 14, ADR-004 — shown), read from state.style.
         const st = state.style || {};
-        const styleChips = [
-          ['Naming', st.namingConvention || 'default'],
-          ['Indent', (st.formatting && st.formatting.indent) || 'default'],
-          ['Architecture', st.architectureDepth || 'default'],
-        ];
-        // Day 19: integrations chips (ADR-004 — the full intake is shown).
+        const styleChips = [['Naming', st.namingConvention || 'default'], ['Indent', (st.formatting && st.formatting.indent) || 'default'], ['Architecture', st.architectureDepth || 'default']];
         const ig = state.integrations || {};
         const integChips = [['Email', ig.email || 'none'], ['AI', ig.ai || 'none']];
-        for (const [k, v] of [['Backend', p.backend], ['Frontend', p.frontend], ['Database', p.database], ['Multi-user', p.multiUser ? 'Yes' : 'No'], ['Auth', p.auth], ...styleChips, ...integChips]) {
+        // Day 11: the pinned framework/language versions (ADR-004 — shown).
+        const vers = state.versions || {};
+        const verChips = Object.entries(vers).map(([k, v]) => [k, v]);
+        for (const [k, v] of [['Backend', p.backend], ['Frontend', p.frontend], ['Database', p.database], ['Multi-user', p.multiUser ? 'Yes' : 'No'], ['Auth', p.auth], ...verChips, ...styleChips, ...integChips]) {
           const chip = document.createElement('span'); chip.className = 'bp-chip';
           const kk = document.createElement('span'); kk.className = 'k'; kk.textContent = k + ':';
           chip.appendChild(kk); chip.appendChild(document.createTextNode(' ' + v)); chips.appendChild(chip);
         }
         summary.appendChild(chips);
-        // Day 19: the project description (ADR-004 — shown when provided; nothing when blank).
         if (state.description && state.description.trim()) {
-          const desc = document.createElement('div'); desc.className = 'bp-desc';
-          desc.style.cssText = 'margin-top:8px;color:var(--muted2);font-size:13px;white-space:pre-wrap';
-          desc.textContent = state.description.trim();
-          summary.appendChild(desc);
+          const desc = document.createElement('div'); desc.style.cssText = 'margin-top:8px;color:var(--muted2);font-size:13px;white-space:pre-wrap'; desc.textContent = state.description.trim(); summary.appendChild(desc);
         }
         host.appendChild(summary);
 
@@ -912,24 +968,20 @@
         const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('class', 'bp-links');
         svg.innerHTML = '<defs><marker id="bp-arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b7499"></path></marker></defs>';
         const ents = document.createElement('div'); ents.className = 'bp-entities';
-        const entities = state.entities || [];
-        if (entities.length === 0) ents.innerHTML = '<div class="bp-empty">No entities yet — add one (step 2) and it appears here.</div>';
-        entities.forEach((e, i) => ents.appendChild(entityBox(e, p.multiUser, i)));
+        const entityArr = state.entities || [];
+        if (entityArr.length === 0) ents.innerHTML = '<div class="bp-empty">No entities yet — add one (step 2) and it appears here.</div>';
+        entityArr.forEach((e, i) => ents.appendChild(entityBox(e, p.multiUser, i)));
         canvas.appendChild(svg); canvas.appendChild(ents); host.appendChild(canvas);
-        // Draw connections now: reading getBoundingClientRect below forces layout,
-        // so no rAF is needed (and rAF can be unreliable in headless renderers).
-        drawRelationships(svg, canvas, ents, entities);
+        drawRelationships(svg, canvas, ents, entityArr);
       }
-      function drawRelationships(svg, canvas, entsContainer, entities) {
+      function drawRelationships(svg, canvas, entsContainer, entityArr) {
         [...svg.querySelectorAll('line')].forEach((n) => n.remove());
         svg.setAttribute('width', canvas.scrollWidth); svg.setAttribute('height', canvas.scrollHeight);
         const boxes = {};
         entsContainer.querySelectorAll('.bp-entity').forEach((el) => { boxes[el.dataset.entity] = el; });
-        // Layout-based coordinates (offsetLeft/Top summed up to the canvas). This is
-        // reliable regardless of scroll position or paint timing, unlike getBoundingClientRect.
         const posInCanvas = (el) => { let x = 0, y = 0, n = el; while (n && n !== canvas) { x += n.offsetLeft; y += n.offsetTop; n = n.offsetParent; } return { x, y }; };
-        const center = (el) => { const p = posInCanvas(el); return { x: p.x + el.offsetWidth / 2, y: p.y + el.offsetHeight / 2 }; };
-        for (const e of entities) {
+        const center = (el) => { const pp = posInCanvas(el); return { x: pp.x + el.offsetWidth / 2, y: pp.y + el.offsetHeight / 2 }; };
+        for (const e of entityArr) {
           for (const rel of e.relationships || []) {
             const target = relTarget(rel); const from = boxes[e.name]; const to = target && boxes[target];
             if (!from || !to || from === to) continue;
@@ -942,13 +994,19 @@
         }
       }
 
-      // ── Seed the Screen-2 form (same as before) + initial state ──────────
-      addFieldRow('title', 'String');
-      addFieldRow('code', 'String');
-      document.getElementById('entityName').value = 'Ticket';
-      updateStepper();
-      onTypeChange(); // reflect the type↔frontend constraint on load (default Web App)
-      refreshState();
+      // ── boot ──────────────────────────────────────────────────────────────
+      async function boot() {
+        initMode();
+        // Seed the Screen-2 field form with the Ticket demo's first two fields.
+        addFieldRow('title', 'String');
+        addFieldRow('code', 'String');
+        $('entityName').value = 'Ticket';
+        updateStepper();
+        try { applyOptions(await api('GET', '/api/options')); }
+        catch (e) { applyOptions(FALLBACK_OPTIONS); log('Using built-in option set (org profile not loaded).', ''); }
+        renderChoices();
+      }
+      boot();
     </script>
   </body>
 </html>

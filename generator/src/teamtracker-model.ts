@@ -18,7 +18,8 @@
  * run, so generation stays deterministic (its own stable hash).
  */
 
-import { createProjectModel, type ProjectModel, type RelationshipSpec } from './core/project-model.js';
+import { type ProjectModel, type RelationshipSpec } from './core/project-model.js';
+import { assembleBlueprint } from './core/assemble.js';
 
 /** A single "belongs-to" link to another entity (FK owner + blueprint connection). */
 function belongsTo(target: string): RelationshipSpec {
@@ -29,57 +30,61 @@ function belongsTo(target: string): RelationshipSpec {
  * Build the TeamTracker demo model. `backend` defaults to 'Spring Boot' (like the
  * DemoApp example); the UI/CLI can drive the SAME blueprint through any backend
  * plugin by changing only that answer.
+ *
+ * Day 16: like DemoApp, this feeds the canonical `assembleBlueprint(choices)`. The
+ * four related entities are supplied in dependency order (a belongs-to target must be
+ * defined earlier — the model enforces it). No optional dimension is supplied, so the
+ * assembled state is byte-for-byte the previous sequence's — the 10 TeamTracker
+ * relationship baselines reproduce unchanged.
  */
 export function buildTeamTrackerModel(
   overrides: { backend?: string; database?: string; projectType?: 'Web App' | 'API-only' } = {},
 ): ProjectModel {
-  const model = createProjectModel({
-    projectName: 'TeamTracker',
-    projectType: overrides.projectType ?? 'Web App',
-    backend: overrides.backend ?? 'Spring Boot',
-    frontend: 'React',
-    database: overrides.database ?? 'PostgreSQL',
-    multiUser: true,
-    auth: 'Simple login',
-  });
-
-  // Team — top of the hierarchy.
-  model.addEntity({
-    name: 'Team',
-    fields: [
-      { name: 'name', type: 'String', required: true },
-      { name: 'description', type: 'String' },
+  return assembleBlueprint({
+    settings: {
+      projectName: 'TeamTracker',
+      projectType: overrides.projectType ?? 'Web App',
+      backend: overrides.backend ?? 'Spring Boot',
+      frontend: 'React',
+      database: overrides.database ?? 'PostgreSQL',
+      multiUser: true,
+      auth: 'Simple login',
+    },
+    entities: [
+      // Team — top of the hierarchy.
+      {
+        name: 'Team',
+        fields: [
+          { name: 'name', type: 'String', required: true },
+          { name: 'description', type: 'String' },
+        ],
+      },
+      // Application — belongs to a Team.
+      {
+        name: 'Application',
+        fields: [
+          { name: 'name', type: 'String', required: true },
+          { name: 'status', type: 'String' },
+        ],
+        relationships: [belongsTo('Team')],
+      },
+      // Ticket — belongs to an Application and a Team.
+      {
+        name: 'Ticket',
+        fields: [
+          { name: 'title', type: 'String', required: true },
+          { name: 'code', type: 'String', unique: true },
+          { name: 'priority', type: 'Integer' },
+          { name: 'done', type: 'Boolean' },
+        ],
+        relationships: [belongsTo('Application'), belongsTo('Team')],
+      },
+      // Comment — belongs to a Ticket.
+      {
+        name: 'Comment',
+        fields: [{ name: 'body', type: 'Text', required: true }],
+        relationships: [belongsTo('Ticket')],
+      },
     ],
   });
-
-  // Application — belongs to a Team.
-  model.addEntity({
-    name: 'Application',
-    fields: [
-      { name: 'name', type: 'String', required: true },
-      { name: 'status', type: 'String' },
-    ],
-    relationships: [belongsTo('Team')],
-  });
-
-  // Ticket — belongs to an Application and a Team.
-  model.addEntity({
-    name: 'Ticket',
-    fields: [
-      { name: 'title', type: 'String', required: true },
-      { name: 'code', type: 'String', unique: true },
-      { name: 'priority', type: 'Integer' },
-      { name: 'done', type: 'Boolean' },
-    ],
-    relationships: [belongsTo('Application'), belongsTo('Team')],
-  });
-
-  // Comment — belongs to a Ticket.
-  model.addEntity({
-    name: 'Comment',
-    fields: [{ name: 'body', type: 'Text', required: true }],
-    relationships: [belongsTo('Ticket')],
-  });
-
-  return model;
 }

@@ -33,7 +33,9 @@ import { createProjectModel, restoreProjectModel, type ProjectModel } from './co
 import { defaultCodingStyle, toSnakeCase, toCamelCase, applyNaming, type CodingStyle } from './core/style.js';
 import { buildMaxCellModel } from './maxcell-fixture.js';
 import { resolveVersions, type StackVersions } from './core/versions.js';
-import { applyProfile, fullOptionSet, existingDefaults } from './core/org-profile.js';
+import { applyProfile, fullOptionSet, existingDefaults, type OrgProfile } from './core/org-profile.js';
+import { assembleBlueprint, type BlueprintChoices } from './core/assemble.js';
+import { canonicalStringify } from './core/canonical-json.js';
 import type { GeneratedFile } from './core/plugin.js';
 
 // ── The enumerated frozen-baseline set (43). Guard-the-guarded to source reports. ──
@@ -384,6 +386,65 @@ async function main(): Promise<void> {
     const p2 = JSON.stringify(applyProfile(full, prof));
     const filtered = applyProfile(full, prof);
     record(p1 === p2 && !filtered.optionSet.database.includes('MySQL') && filtered.defaults.backend === 'Express', 'profile-present applyProfile twice-identical + filters (hard ban MySQL, default Express)');
+  }
+
+  // ══ PART 1i — canonical assembleBlueprint: UI==CLI STRUCTURAL (Eco-Day 16) ════
+  // The progressive-disclosure wizard backend and the CLI/programmatic path both feed
+  // ONE `assembleBlueprint(choices)`. So UI==CLI is STRUCTURAL, not coincidental: the
+  // SAME BlueprintChoices object → the SAME canonical ProjectState (canonicalStringify
+  // equal, twice-identical) → byte-identical output (buildFileSet is pure over state).
+  //  • DEFAULT choices reproduce a FROZEN baseline → simple-mode is a LITERAL BYPASS,
+  //    proven THROUGH assembleBlueprint (and equal to the canonical demo builder's state).
+  //  • a NON-DEFAULT set (a framework+version pin + an org-policy-FORCED choice) reproduces
+  //    its additive VERSION baseline, with NO profile/UI/enforcement metadata in the output.
+  // A gate that can actually FAIL (moved state or leaked metadata ⇒ red).
+  process.stdout.write('\n=== PART 1i: canonical assembleBlueprint — UI==CLI structural (Eco-Day 16) ===\n');
+  {
+    const ticket = {
+      name: 'Ticket',
+      fields: [
+        { name: 'title', type: 'String', required: true },
+        { name: 'code', type: 'String', unique: true },
+        { name: 'priority', type: 'Integer' },
+        { name: 'done', type: 'Boolean' },
+      ],
+    };
+
+    // (a) DEFAULT choices (Express|PostgreSQL|DemoApp) — the simple-mode/accept-defaults
+    // set: only the required backbone + entities; no versions/style/integrations/description.
+    const defaultChoices: BlueprintChoices = {
+      settings: { projectName: 'DemoApp', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' },
+      entities: [ticket],
+    };
+    const s1 = canonicalStringify(assembleBlueprint(defaultChoices).getState());
+    const s2 = canonicalStringify(assembleBlueprint(defaultChoices).getState());
+    const cli = canonicalStringify(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }).getState());
+    const defHash = await hashOf(assembleBlueprint(defaultChoices));
+    const defaultOk = s1 === s2 && s1 === cli && defHash === FROZEN['Express|PostgreSQL|DemoApp'];
+    record(defaultOk, 'DEFAULT choices → same state twice == CLI builder == frozen baseline (simple-mode literal bypass, structural)', defHash.slice(0, 16));
+
+    // (b) NON-DEFAULT choices: an org-profile FORCES backend=Express + hard-bans MySQL;
+    // the wizard would present Express pre-selected and no MySQL. The user accepts the
+    // forced default, picks PostgreSQL, and pins node 20 (a framework+version choice).
+    const profile: OrgProfile = { profileVersion: '1', id: 'day16-proof', dimensions: { backend: { forceDefault: 'Express', enforcement: 'hard' }, database: { ban: ['MySQL'], enforcement: 'hard' } } };
+    const applied = applyProfile(fullOptionSet(), profile);
+    const profileShaped = applied.defaults.backend === 'Express' && !applied.optionSet.database.includes('MySQL');
+    const ndChoices: BlueprintChoices = {
+      settings: { projectName: 'DemoApp', projectType: 'Web App', backend: applied.defaults.backend, frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' },
+      versions: { node: '20' },
+      entities: [ticket],
+    };
+    const n1 = canonicalStringify(assembleBlueprint(ndChoices).getState());
+    const n2 = canonicalStringify(assembleBlueprint(ndChoices).getState());
+    const ndFiles = await filesOf(assembleBlueprint(ndChoices));
+    const ndHash = hashFiles(ndFiles);
+    // No profile/UI/enforcement metadata may appear in ANY generated file (the Day-13 rule).
+    const leak = ndFiles.find((f) => /day16-proof|forceDefault|enforcement|advisor/i.test(f.content));
+    // The additive Express node-20 baseline (PART 1g / VERSION_BASELINES) — the concrete
+    // blueprint alone determines it; the profile only shaped the input (Day-13 provenance).
+    const expressNode20 = VERSION_BASELINES.find(([b, o]) => b === 'Express' && o.node === '20')![2];
+    const ndOk = profileShaped && n1 === n2 && ndHash === expressNode20 && !leak;
+    record(ndOk, 'NON-DEFAULT choices (profile-forced Express + node 20) → twice-identical == version baseline, NO profile metadata in output', ndHash.slice(0, 16) + (leak ? ` LEAK:${leak.relPath}` : ''));
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
