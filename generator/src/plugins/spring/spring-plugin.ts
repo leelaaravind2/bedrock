@@ -19,6 +19,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Entity, PhaseASettings, ProjectModel } from '../../core/project-model.js';
+import { versionTokens } from '../../core/versions.js';
 import type { BackendPlugin, EntityGenerationContext, GeneratedFile } from '../../core/plugin.js';
 import type { DatabaseProvider } from '../../core/database.js';
 import { postgresProvider } from '../database/postgres.js';
@@ -172,7 +173,7 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
     async generateProjectShell(model: ProjectModel): Promise<GeneratedFile[]> {
       // Provider tokens first, then project tokens: a provider token value may
       // embed project tokens (e.g. compose fragments), which must resolve after.
-      const tokens = { ...database.tokens(), ...deriveTokens(model.getPhaseASettings()) };
+      const tokens = { ...database.tokens(), ...deriveTokens(model.getPhaseASettings()), ...versionTokens(model.getVersions()) };
       // Day 15: API-only (frontend === 'None') subtracts the frontend slice. This
       // is a LITERAL BYPASS otherwise — Web-App runs the exact original walk.
       const apiOnly = isFrontendless(model);

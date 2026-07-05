@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Self-contained — no Node needed on the host (Laws 19-21).
-FROM node:22-alpine
+FROM node:__NODE_VERSION__-alpine
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev

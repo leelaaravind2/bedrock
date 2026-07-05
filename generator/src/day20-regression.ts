@@ -32,6 +32,7 @@ import { selectBackendPlugin } from './plugins/registry.js';
 import { createProjectModel, restoreProjectModel, type ProjectModel } from './core/project-model.js';
 import { defaultCodingStyle, toSnakeCase, toCamelCase, applyNaming, type CodingStyle } from './core/style.js';
 import { buildMaxCellModel } from './maxcell-fixture.js';
+import { resolveVersions, type StackVersions } from './core/versions.js';
 import type { GeneratedFile } from './core/plugin.js';
 
 // ── The enumerated frozen-baseline set (43). Guard-the-guarded to source reports. ──
@@ -107,6 +108,16 @@ const AI_HOOK: Record<string, string> = {
 // replacement for the retired, record-only, un-reproducible `33f3ec4b…`. Its input
 // is the committed fixture in maxcell-fixture.ts. ADDITIVE: moves none of the 43+10.
 const MAXIMAL = '929c379f9e98ec34c3a42bafe814ebb65fffde0820d754176a7c7ab95c825e20';
+
+// Non-default framework/version baselines (Eco-Day 11) — one per stack, DemoApp|PostgreSQL.
+// ADDITIVE: each is a NEW twice-identical baseline for a non-default pin; none replaces a frozen hash.
+const VERSION_BASELINES: [string, Partial<StackVersions>, string][] = [
+  ['Spring Boot', { java: '17' }, '9d81ba25a5bda197a82bcf3bd833a8808a14d47cd1c4a7a8675467aba3f877bc'],
+  ['Express', { node: '20' }, '106075085320ebe4541c1772e838a4d13575e068efe25fcaa87dd7c636c27516'],
+  ['FastAPI', { python: '3.11' }, 'd5c0605c48f9e6ddb1757513779d46d55875abb383edd43ad786696529167c9d'],
+  ['Django', { django: '5.0.1' }, 'd1c007b22f27006e6cec7d012f81e806a05551c62ec4326ec2e17c76919d0df2'],
+  ['Go', { go: '1.21' }, 'e926ef6112153b2663ad706f24c054abd8715170ac472c5a6dcde5cec30b9660'],
+];
 
 const BACKENDS = ['Spring Boot', 'Express', 'FastAPI', 'Django', 'Go'];
 const DATABASES = ['PostgreSQL', 'MySQL'];
@@ -336,9 +347,30 @@ async function main(): Promise<void> {
     record(a === b && a === MAXIMAL, 'MAXIMAL composition cell twice-identical == recorded baseline', a.slice(0, 16));
   }
 
+  // ══ PART 1g — non-default VERSION baselines (Eco-Day 11) ══════════════════════
+  // Framework+version is a first-class pinned input. DEFAULT pins reproduce the frozen
+  // matrix (the literal bypass, proven above); a NON-DEFAULT version produces its OWN
+  // twice-identical baseline — ADDITIVE (moves no frozen hash). These prove the version
+  // flows deterministically into every version-bearing spot; NOT that the combo boots
+  // (validity is Day 13 org-policy + Day 18 toolchain).
+  process.stdout.write('\n=== PART 1g: non-default version baselines (Eco-Day 11) ===\n');
+  {
+    for (const [backend, override, expected] of VERSION_BASELINES) {
+      const gen = async () => {
+        const m = buildDemoAppModel({ backend, database: 'PostgreSQL' });
+        m.setVersions(resolveVersions(backend, override));
+        return hashFiles(await filesOf(m));
+      };
+      const a = await gen(); const b = await gen();
+      const dflt = hashFiles(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL' })));
+      bake(`VERSION|${backend}|${Object.keys(override)[0]}`, a);
+      record(a === b && a === expected && a !== dflt, `version baseline ${backend} (${Object.entries(override)[0].join(' ')}) twice-identical == recorded, differs from default`, a.slice(0, 16));
+    }
+  }
+
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
-  process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL baselines + non-hash checks + property re-derivations)\n`);
+  process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);
   if (!pass) process.exit(1);
 }
 

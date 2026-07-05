@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Self-contained — no Go needed on the host (Laws 19-21).
-FROM golang:1.22-alpine AS build
+FROM golang:__GO_VERSION__-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 COPY . .

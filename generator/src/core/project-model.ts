@@ -29,6 +29,7 @@
 
 import { type CodingStyle, defaultCodingStyle } from './style.js';
 import { type Integrations, defaultIntegrations } from './integrations.js';
+import { type StackVersions, defaultVersionsFor } from './versions.js';
 
 // ---------------------------------------------------------------------------
 // Domain types — the Project Model shapes (per docs/INTAKE-SPEC.md).
@@ -166,6 +167,13 @@ export interface ProjectState {
    * the blueprint (ADR-004). It never influences generated CODE.
    */
   description: string;
+  /**
+   * The pinned framework/language versions for the selected backend (Day 11). Default
+   * = the version today's output already implies (DEFAULT_VERSIONS), so the default
+   * path is a literal bypass that reproduces the frozen hashes byte-for-byte. Concrete
+   * only — "latest" is resolved to a pin BEFORE generation (resolve-then-pin).
+   */
+  versions: StackVersions;
 }
 
 /** The Project Model API — the "map" the platform reads and updates. */
@@ -192,7 +200,11 @@ export interface ProjectModel {
   getDescription(): string;
   /** Set the project description (a neutral intake value; README-only when provided). */
   setDescription(description: string): void;
-  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description. */
+  /** The pinned framework/language versions for the selected backend (Day 11). */
+  getVersions(): StackVersions;
+  /** Set the pinned versions (must be CONCRETE — resolve "latest" before this). */
+  setVersions(versions: StackVersions): void;
+  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions. */
   getState(): ProjectState;
 }
 
@@ -360,10 +372,21 @@ export function createProjectModel(settings: PhaseASettingsInput): ProjectModel 
 
   const entities: Entity[] = [];
 
+  // Framework/language versions default to the current-implied pins for this backend
+  // (Day 11). Default = current value ⇒ a literal bypass (byte-identical output).
+  //
+  // ADR-004 (shown, not silent): versions are surfaced via getState()/getVersions()
+  // (the blueprint the wizard shows) — NOT via defaultsApplied. defaultsApplied is
+  // rendered into GENERATION-MANIFEST.txt (a frozen output), so recording versions
+  // there would move every frozen hash. This is the SAME rule the coding-style engine
+  // follows (style is blueprint-shown, never manifest-recorded, for exactly this
+  // reason — see CAPABILITIES §3). Visibility is wizard-side; the manifest is frozen.
+  const versions = defaultVersionsFor(phaseA.backend as string);
+
   // Integrations default to none (a literal bypass); a post-setup choice supplied
   // via setIntegrations (like the coding style), so the wizard/CLI opt in later.
   // Description defaults to '' (a literal bypass) — supplied later via setDescription.
-  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '');
+  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions);
 }
 
 /**
@@ -378,12 +401,15 @@ function makeModel(
   initialStyle: CodingStyle,
   initialIntegrations: Integrations,
   initialDescription: string,
+  initialVersions: StackVersions,
 ): ProjectModel {
   // Held in the closure like Phase-A/entities. Default is a no-op style / no
-  // integrations / blank description — each a literal bypass.
+  // integrations / blank description — each a literal bypass. Versions default to
+  // the current-implied pins (Day 11) — also a literal bypass (byte-identical output).
   let style: CodingStyle = initialStyle;
   let integrations: Integrations = initialIntegrations;
   let description: string = initialDescription;
+  let versions: StackVersions = { ...initialVersions };
   return {
     getPhaseASettings(): PhaseASettings {
       const copy: Record<string, unknown> = {};
@@ -471,6 +497,17 @@ function makeModel(
       description = typeof next === 'string' ? next : '';
     },
 
+    getVersions(): StackVersions {
+      return { ...versions };
+    },
+
+    setVersions(next: StackVersions): void {
+      // Concrete pins only (resolve "latest" before this). versionTokens asserts
+      // concreteness at generation, so a "latest" here surfaces as an error, not
+      // a silent resolve-at-generate (ADR-003).
+      versions = { ...next };
+    },
+
     getState(): ProjectState {
       return {
         phaseA: this.getPhaseASettings(),
@@ -479,6 +516,7 @@ function makeModel(
         style: this.getStyle(),
         integrations: this.getIntegrations(),
         description: this.getDescription(),
+        versions: this.getVersions(),
       };
     },
   };
@@ -535,5 +573,12 @@ export function restoreProjectModel(state: ProjectSnapshot): ProjectModel {
   // Snapshots that predate the description (Day 19) have no `description` — default
   // to '' so those versions regenerate byte-for-byte (ADR-003).
   const description: string = typeof state.description === 'string' ? state.description : '';
-  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description);
+  // Snapshots that predate versions (Day 11) have no `versions` — default to the
+  // current-implied pins for the backend so those versions regenerate byte-for-byte
+  // (ADR-003). A snapshot that carries versions uses them verbatim (concrete pins).
+  const versions: StackVersions =
+    state.versions && Object.keys(state.versions).length > 0
+      ? { ...state.versions }
+      : defaultVersionsFor(phaseA.backend as string);
+  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions);
 }

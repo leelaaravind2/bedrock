@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "bcryptjs": "2.4.3",
-    "express": "4.21.2",
+    "express": "__EXPRESS_VERSION__",
     "__DB_NODE_DRIVER__": "__DB_NODE_DRIVER_VERSION__"
   }
 }

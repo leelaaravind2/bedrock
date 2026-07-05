@@ -14,6 +14,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Entity, PhaseASettings, ProjectModel } from '../../core/project-model.js';
+import { versionTokens } from '../../core/versions.js';
 import type { BackendPlugin, EntityGenerationContext, GeneratedFile } from '../../core/plugin.js';
 import type { CodingStyle } from '../../core/style.js';
 import { indentUnitFor, reindent } from '../../core/style.js';
@@ -190,7 +191,10 @@ const EMAIL_SERVICE_JS = [
 
 /** Add nodemailer to package.json dependencies (valid JSON; resolves under npm install). */
 function addNodemailerDep(raw: string): string {
-  return raw.replace(`    "express": "4.21.2",`, `    "express": "4.21.2",\n    "nodemailer": "6.9.16",`);
+  // Anchor on the tokenized express line (Day 11) — this transform runs on the RAW
+  // template, so it must match the token, not the resolved literal. After token
+  // substitution __EXPRESS_VERSION__ → the pinned version, so output is unchanged.
+  return raw.replace(`    "express": "__EXPRESS_VERSION__",`, `    "express": "__EXPRESS_VERSION__",\n    "nodemailer": "6.9.16",`);
 }
 
 /** Load the email module at startup so a broken mailer fails the boot (proves it's wired). */
@@ -371,7 +375,7 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
     async generateProjectShell(model: ProjectModel): Promise<GeneratedFile[]> {
       // Provider tokens first, then project tokens: a provider token value may
       // embed project tokens (e.g. compose fragments), which must resolve after.
-      const tokens = { ...database.tokens(), ...deriveTokens(model.getPhaseASettings()) };
+      const tokens = { ...database.tokens(), ...deriveTokens(model.getPhaseASettings()), ...versionTokens(model.getVersions()) };
       // Day 17: email adds a coherent slice (nodemailer); a LITERAL BYPASS otherwise.
       const email = model.getIntegrations().email === 'smtp';
       // Day 18: the AI hook adds a detachable /api/ai/* surface (built-in fetch, no

@@ -15,6 +15,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Entity, PhaseASettings, ProjectModel } from '../../core/project-model.js';
+import { versionTokens } from '../../core/versions.js';
 import type { BackendPlugin, EntityGenerationContext, GeneratedFile } from '../../core/plugin.js';
 import type { DatabaseProvider } from '../../core/database.js';
 import { postgresProvider } from '../database/postgres.js';
@@ -87,7 +88,7 @@ export function createDjangoPlugin(options: DjangoPluginOptions = {}): BackendPl
     async generateProjectShell(model: ProjectModel): Promise<GeneratedFile[]> {
       // Provider tokens first, then project tokens: a provider token value may
       // embed project tokens (e.g. compose fragments), which must resolve after.
-      const tokens = { ...database.tokens(), ...deriveTokens(model.getPhaseASettings()) };
+      const tokens = { ...database.tokens(), ...deriveTokens(model.getPhaseASettings()), ...versionTokens(model.getVersions()) };
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');

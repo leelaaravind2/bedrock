@@ -1,6 +1,6 @@
 module app
 
-go 1.22
+go __GO_VERSION__
 
 require (
 	__DB_GO_DRIVER_REQUIRE__

@@ -2,7 +2,7 @@
 # Multi-stage build: build the static bundle with Node, serve it with nginx.
 # Self-contained — no Node needed on the host (Laws 19-21).
 
-FROM node:22-alpine AS build
+FROM node:__NODE_VERSION__-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install
