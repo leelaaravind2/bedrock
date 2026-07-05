@@ -5,8 +5,12 @@
 !/docs/
 !/scratch/
 !/Design/
+!/scripts/
+!/.github/
+!/.githooks/
 !/.gitignore
 !/.gitattributes
+!/CLAUDE.md
 
 **/node_modules/
 **/dist/

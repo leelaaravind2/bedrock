@@ -1,0 +1,39 @@
+#!/bin/sh
+# Thraksha pre-commit — the DETERMINISM GATE (Eco-Day 9).
+#
+# Guarantees the frozen backstop is green before a commit lands: builds the
+# generator and runs day20:regress (pure Node, ~seconds). If the backstop is red,
+# the commit is BLOCKED. Also runs the resources freshness guard if resources exist.
+#
+# Enable once per clone (documented in CLAUDE.md):
+#   git config core.hooksPath .githooks
+#
+# ("format-on-write" is n/a — there is no external formatter; formatting
+#  determinism is the generator's internal reindent.)
+
+set -e
+ROOT="$(git rev-parse --show-toplevel)"
+LOG="$(mktemp 2>/dev/null || echo "$ROOT/.git/precommit.log")"
+
+echo "[pre-commit] determinism gate: building generator + day20:regress..."
+cd "$ROOT/generator"
+if ! npm run build >"$LOG" 2>&1; then
+  echo "[pre-commit] BLOCKED: generator build (tsc) failed."; tail -8 "$LOG"; exit 1
+fi
+if ! npm run day20:regress >"$LOG" 2>&1; then
+  echo "[pre-commit] BLOCKED: day20:regress FAILED — the determinism backstop is RED. Commit aborted."
+  tail -8 "$LOG"; exit 1
+fi
+echo "[pre-commit] OK: backstop green (43 frozen + 10 relationship + MAXIMAL, byte-identical)."
+
+# Optional: resources freshness (only if the sidecar resources have been synced).
+if [ -f "$ROOT/desktop/src-tauri/resources/gen/REFRESH-STAMP.json" ]; then
+  echo "[pre-commit] checking sidecar resources freshness..."
+  if ! node "$ROOT/scripts/sync-generator-resources.mjs" --check >"$LOG" 2>&1; then
+    echo "[pre-commit] WARNING: sidecar resources are stale (run: cd desktop && npm run sync-gen)."
+    tail -3 "$LOG"
+    # A warning, not a block: resources/gen is gitignored (not committed); staleness
+    # only matters at packaging time, which beforeBuildCommand handles.
+  fi
+fi
+exit 0

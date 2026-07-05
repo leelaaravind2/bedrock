@@ -1,0 +1,41 @@
+# Thraksha — determinism CI (Eco-Day 9).
+#
+# Runs the pure-Node determinism harness (day20:regress) on a 3-OS matrix, making
+# the frozen backstop an AUTOMATIC gate and — for the first time — putting macOS
+# under test (deferred since Day 2 for lack of a machine).
+#
+# HONESTY: macOS determinism is UNPROVEN — this matrix IS the proof. If the macOS
+# runner diverges from the frozen 43+10+MAXIMAL, that is a REAL FINDING (a
+# macOS-specific path/EOL/ordering issue) to diagnose — NOT something to
+# continue-on-error or fake green. Windows + Linux are expected green (Day 2 proved
+# Windows==Linux). This gates the GENERATOR only (pure Node); the Tauri/sidecar
+# cross-OS BUILD is separate and still deferred.
+
+name: determinism
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  regress:
+    name: day20:regress (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false            # let every OS report — don't hide a macOS finding behind a fast Windows pass
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: generator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install (pinned)
+        run: npm ci
+      - name: Build (tsc)
+        run: npm run build
+      - name: Determinism regression (43 + 10 + MAXIMAL, byte-identical)
+        run: npm run day20:regress
