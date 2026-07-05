@@ -33,3 +33,8 @@ export function selectDatabaseProvider(model: ProjectModel): DatabaseProvider {
   }
   return provider;
 }
+
+/** The installed database names (for UIs / the option-set descriptor). */
+export function availableDatabases(): string[] {
+  return Object.keys(DATABASES);
+}

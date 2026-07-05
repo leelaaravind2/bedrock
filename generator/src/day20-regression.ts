@@ -33,6 +33,7 @@ import { createProjectModel, restoreProjectModel, type ProjectModel } from './co
 import { defaultCodingStyle, toSnakeCase, toCamelCase, applyNaming, type CodingStyle } from './core/style.js';
 import { buildMaxCellModel } from './maxcell-fixture.js';
 import { resolveVersions, type StackVersions } from './core/versions.js';
+import { applyProfile, fullOptionSet, existingDefaults } from './core/org-profile.js';
 import type { GeneratedFile } from './core/plugin.js';
 
 // ── The enumerated frozen-baseline set (43). Guard-the-guarded to source reports. ──
@@ -366,6 +367,23 @@ async function main(): Promise<void> {
       bake(`VERSION|${backend}|${Object.keys(override)[0]}`, a);
       record(a === b && a === expected && a !== dflt, `version baseline ${backend} (${Object.entries(override)[0].join(' ')}) twice-identical == recorded, differs from default`, a.slice(0, 16));
     }
+  }
+
+  // ══ PART 1h — org-policy layer determinism (Eco-Day 13) ══════════════════════
+  // The org-profile is a PURE input-shaping layer (metadata, not files). Profile-ABSENT
+  // must be IDENTITY; a given profile must be twice-identical. A non-hash guard —
+  // generation is untouched (the literal bypass is by construction; the 49 above prove it).
+  process.stdout.write('\n=== PART 1h: org-policy layer determinism (Eco-Day 13) ===\n');
+  {
+    const full = fullOptionSet();
+    const abs = applyProfile(full, undefined);
+    const absId = JSON.stringify(abs.defaults) === JSON.stringify(existingDefaults()) && abs.advisories.length === 0 && Object.keys(abs.optionSet).length === Object.keys(full).length;
+    record(absId, 'profile-absent applyProfile == identity (existing defaults, no advisories)');
+    const prof = { profileVersion: '1', id: 'guard', dimensions: { database: { ban: ['MySQL'], enforcement: 'hard' as const }, backend: { forceDefault: 'Express', enforcement: 'hard' as const } } };
+    const p1 = JSON.stringify(applyProfile(full, prof));
+    const p2 = JSON.stringify(applyProfile(full, prof));
+    const filtered = applyProfile(full, prof);
+    record(p1 === p2 && !filtered.optionSet.database.includes('MySQL') && filtered.defaults.backend === 'Express', 'profile-present applyProfile twice-identical + filters (hard ban MySQL, default Express)');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
