@@ -1,0 +1,15 @@
+{
+  "name": "__ARTIFACT_ID__-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "__PROJECT_NAME__ backend — generated Express + __DB_DISPLAY_NAME__ API",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "2.4.3",
+    "express": "4.21.2",
+    "__DB_NODE_DRIVER__": "__DB_NODE_DRIVER_VERSION__"
+  }
+}

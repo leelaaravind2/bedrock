@@ -1,0 +1,59 @@
+Thraksha — Generation Manifest
+==============================
+
+Project (Phase A):
+  - projectName: DemoApp
+  - projectType: Web App
+  - backend: Spring Boot
+  - frontend: React
+  - database: PostgreSQL
+  - multiUser: true
+  - auth: Simple login
+
+Phase-A defaults applied (ADR-004 — shown, not silent):
+  (none)
+
+Entities (1):
+  Ticket (owner-scoped: yes)
+    fields:
+      - Ticket.title: String, required=true, unique=false (default: no), maxLength=255 (default for String)
+      - Ticket.code: String, required=false (default: optional), unique=true, maxLength=255 (default for String)
+      - Ticket.priority: Integer, required=false (default: optional), unique=false (default: no)
+      - Ticket.done: Boolean, required=false (default: optional), unique=false (default: no)
+
+Generated files (35) — [T] Thraksha-owned (regenerated), [D] developer-owned (created once):
+  [T] .env.example
+  [T] .gitignore
+  [T] README.md
+  [T] backend/.dockerignore
+  [T] backend/Dockerfile
+  [T] backend/pom.xml
+  [T] backend/src/main/java/com/demoapp/DemoAppApplication.java
+  [T] backend/src/main/java/com/demoapp/common/BaseOwnedEntity.java
+  [T] backend/src/main/java/com/demoapp/common/CurrentUserProvider.java
+  [T] backend/src/main/java/com/demoapp/config/DataSeeder.java
+  [T] backend/src/main/java/com/demoapp/config/SecurityConfig.java
+  [T] backend/src/main/java/com/demoapp/health/HealthController.java
+  [D] backend/src/main/java/com/demoapp/ticket/Ticket.java
+  [T] backend/src/main/java/com/demoapp/ticket/TicketBase.java
+  [D] backend/src/main/java/com/demoapp/ticket/TicketController.java
+  [T] backend/src/main/java/com/demoapp/ticket/TicketControllerBase.java
+  [T] backend/src/main/java/com/demoapp/ticket/TicketDto.java
+  [T] backend/src/main/java/com/demoapp/ticket/TicketRepository.java
+  [D] backend/src/main/java/com/demoapp/ticket/TicketService.java
+  [T] backend/src/main/java/com/demoapp/ticket/TicketServiceBase.java
+  [T] backend/src/main/java/com/demoapp/user/AppUserDetailsService.java
+  [T] backend/src/main/java/com/demoapp/user/User.java
+  [T] backend/src/main/java/com/demoapp/user/UserRepository.java
+  [T] backend/src/main/resources/application.yml
+  [T] backend/src/main/resources/db/migration/V1__init.sql
+  [T] backend/src/main/resources/db/migration/V2__create_tickets.sql
+  [T] docker-compose.yml
+  [T] frontend/.dockerignore
+  [T] frontend/Dockerfile
+  [T] frontend/index.html
+  [T] frontend/nginx.conf
+  [T] frontend/package.json
+  [T] frontend/src/App.jsx
+  [T] frontend/src/main.jsx
+  [T] frontend/vite.config.js

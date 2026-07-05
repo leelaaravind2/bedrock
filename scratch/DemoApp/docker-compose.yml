@@ -1,0 +1,42 @@
+# DemoApp — full stack: PostgreSQL + Spring Boot + React (nginx).
+# Run with:  docker compose up --build
+#
+# Standard Docker Compose project. It depends on nothing from Thraksha and runs
+# unchanged after the generator is deleted (Laws 19-21).
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: demoapp
+      POSTGRES_USER: demoapp
+      POSTGRES_PASSWORD: demoapp
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demoapp -d demoapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/demoapp
+      SPRING_DATASOURCE_USERNAME: demoapp
+      SPRING_DATASOURCE_PASSWORD: demoapp
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  db-data:

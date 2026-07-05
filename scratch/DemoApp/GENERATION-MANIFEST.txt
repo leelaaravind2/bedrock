@@ -1,0 +1,45 @@
+Thraksha — Generation Manifest
+==============================
+
+Project (Phase A):
+  - projectName: DemoApp
+  - projectType: Web App
+  - backend: Spring Boot
+  - frontend: React
+  - database: None
+  - multiUser: true
+  - auth: Simple login
+
+Phase-A defaults applied (ADR-004 — shown, not silent):
+  (none)
+
+Entities (0):
+  (none)
+
+Generated files (26) — [T] Thraksha-owned (regenerated), [D] developer-owned (created once):
+  [T] .env.example
+  [T] .gitignore
+  [T] README.md
+  [T] backend/.dockerignore
+  [T] backend/Dockerfile
+  [T] backend/pom.xml
+  [T] backend/src/main/java/com/demoapp/DemoAppApplication.java
+  [T] backend/src/main/java/com/demoapp/common/BaseOwnedEntity.java
+  [T] backend/src/main/java/com/demoapp/common/CurrentUserProvider.java
+  [T] backend/src/main/java/com/demoapp/config/DataSeeder.java
+  [T] backend/src/main/java/com/demoapp/config/SecurityConfig.java
+  [T] backend/src/main/java/com/demoapp/health/HealthController.java
+  [T] backend/src/main/java/com/demoapp/user/AppUserDetailsService.java
+  [T] backend/src/main/java/com/demoapp/user/User.java
+  [T] backend/src/main/java/com/demoapp/user/UserRepository.java
+  [T] backend/src/main/resources/application.yml
+  [T] backend/src/main/resources/db/migration/V1__init.sql
+  [T] docker-compose.yml
+  [T] frontend/.dockerignore
+  [T] frontend/Dockerfile
+  [T] frontend/index.html
+  [T] frontend/nginx.conf
+  [T] frontend/package.json
+  [T] frontend/src/App.jsx
+  [T] frontend/src/main.jsx
+  [T] frontend/vite.config.js

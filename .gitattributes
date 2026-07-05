@@ -1,0 +1,12 @@
+# Determinism: force LF everywhere, never convert to CRLF.
+# Protects the Day-1 line-ending lock (LD-1/LD-2) — byte-identical output depends on LF.
+* text=auto eol=lf
+
+# Binary files — never touch line endings
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.jar binary
+*.woff binary
+*.woff2 binary

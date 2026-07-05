@@ -1,0 +1,40 @@
+# __PROJECT_NAME__ — full stack: __DB_DISPLAY_NAME__ + Spring Boot + React (nginx).
+# Run with:  docker compose up --build
+#
+# Standard Docker Compose project. It depends on nothing from Thraksha and runs
+# unchanged after the generator is deleted (Laws 19-21).
+
+services:
+  db:
+    image: __DB_IMAGE__
+    environment:
+      __DB_COMPOSE_DB_ENV__
+    healthcheck:
+      test: __DB_COMPOSE_HEALTHCHECK__
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - db-data:__DB_VOLUME_PATH__
+
+  backend:
+    build: ./backend
+    environment:
+      SPRING_DATASOURCE_URL: __DB_JDBC_SCHEME__://db:__DB_PORT__/__DB_NAME__
+      SPRING_DATASOURCE_USERNAME: __DB_USER__
+      SPRING_DATASOURCE_PASSWORD: __DB_PASSWORD__
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  db-data:

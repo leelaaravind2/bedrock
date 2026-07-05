@@ -1,0 +1,35 @@
+{
+  "name": "thraksha-generator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Thraksha deterministic project generator + in-memory Project Model (TypeScript).",
+  "scripts": {
+    "build": "tsc",
+    "generate": "node dist/generate.js",
+    "preview": "node dist/generate.js --preview",
+    "demo": "node dist/model-demo.js",
+    "preview:demo": "node dist/preview-demo.js",
+    "version": "node dist/version.js",
+    "version:demo": "node dist/version-demo.js",
+    "two-stacks": "node dist/two-stacks-demo.js",
+    "python:demo": "node dist/python-step2-demo.js",
+    "ui:demo": "node dist/ui-three-stacks-demo.js",
+    "day12:gate": "node dist/day12-gate.js",
+    "day13:gate": "node dist/day13-gate.js",
+    "day14:gate": "node dist/day14-gate.js",
+    "day15:gate": "node dist/day15-gate.js",
+    "day16:gate": "node dist/day16-gate.js",
+    "day17:gate": "node dist/day17-gate.js",
+    "day18:gate": "node dist/day18-gate.js",
+    "day19:gate": "node dist/day19-gate.js",
+    "day20:regress": "node dist/day20-regression.js",
+    "maxcell": "node dist/maxcell-driver.js",
+    "gen:snapshot": "node dist/generate-from-snapshot.js",
+    "ui": "node dist/server.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.0",
+    "typescript": "5.9.3"
+  }
+}
