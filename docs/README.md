@@ -80,6 +80,6 @@ reads them on every task.** Here is the simple routine:
 > The machine does the building.
 > The rules below are how the human stays in control.
 
-This is the same philosophy Thraksha itself is built on, applied to building
+This is the same philosophy bedrock itself is built on, applied to building
 Thraksha. The developer owns intent; the machine owns mechanics; the developer
 verifies. If you understand the platform, you understand your own role.
