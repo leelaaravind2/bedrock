@@ -10,7 +10,7 @@ Plan: [`eco-day-09-plan.md`](eco-day-09-plan.md). Guardrails: [`../THRAKSHA-GUAR
 
 > ✅ **Build-discipline scaffolding in place. RESOURCES-ARE-COPIES FLAG CLOSED** (a `sync-generator` script + freshness guard, wired into `beforeBuildCommand`, proven: sync works, stale is detected, and the refreshed sidecar reproduces the frozen 44 digests). **Determinism CI wired** — a pure-Node `day20:regress` matrix on ubuntu + windows + **macos** (macOS's first-ever test). **CLAUDE.md** files (root + generator + desktop). **Pre-commit hook** proven to block a red backstop. Generator still **pure-Node**; backstop **green from clean**; no frozen hash moved.
 >
-> **CI status is honestly PENDING the first push** — the workflow is committed, but the green-run (and especially the macOS result) is only observable on GitHub Actions after a push, which this shell can't complete (no TTY for auth). **Not claimed green.**
+> **CI status: PUSHED — the run is now triggered, results PENDING observation.** The Day-9 commit (`3510fe0`) was pushed to `origin/main`, so the workflow is now running on GitHub Actions across ubuntu/windows/macos. This automated shell **cannot observe the async run** — the green/red result (and especially **macOS's first-ever** determinism result) must be read at **https://github.com/leelaaravind2/bedrock/actions**. **Not claimed green here.**
 
 **Day 10 = the Phase-0 close/benchmark.**
 
@@ -42,8 +42,8 @@ Plan: [`eco-day-09-plan.md`](eco-day-09-plan.md). Guardrails: [`../THRAKSHA-GUAR
 
 **Why this matters:** `day20:regress` is pure Node (no native deps, no Docker), so the 3-OS matrix is cheap and — for the **first time** — puts **macOS under test** (deferred since Day 2 for lack of a machine). Green would make Windows==Linux==macOS a **permanent automatic gate**.
 
-**Honest status — PENDING, not claimed green:**
-- The workflow is written and committed. **CI only runs once the commit is on GitHub, and runs asynchronously on GitHub's runners** — this automated shell can neither push (no TTY for auth) nor observe the runners.
+**Honest status — PUSHED + triggered, results PENDING observation:**
+- The workflow is committed and **`main` was pushed (`3510fe0`)**, so CI is now triggered. It runs **asynchronously on GitHub's runners** — this automated shell **cannot observe the run**; read it at **https://github.com/leelaaravind2/bedrock/actions**.
 - **Windows + Linux are expected green** (Day-2 proved Windows==Linux locally). **macOS is genuinely UNPROVEN — the matrix IS the proof.**
 - **If the macOS runner diverges** from the frozen 44 digests, that is a **real finding** (a macOS path/EOL/ordering issue) to diagnose — NOT `continue-on-error`, NOT faked. **This report does not claim any macOS result** — it will be read off the first Actions run after the user pushes.
 - **Scope:** this gates the **generator** (pure Node). The **Tauri/sidecar cross-OS BUILD** (needs Rust runners, heavier) stays **deferred** — a separate later item.
