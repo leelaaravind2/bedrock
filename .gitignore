@@ -35,6 +35,9 @@ generator/output/
 **/*.swp
 **/.env
 **/.env.*
+# ...but .env.example is a committed, non-secret GENERATOR TEMPLATE (the build reads
+# it at generation time). Track it, or a fresh checkout ships an incomplete generator.
+!**/.env.example
 **/*.pem
 **/*.key
 **/secrets.*
