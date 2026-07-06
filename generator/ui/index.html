@@ -168,6 +168,21 @@
       .bp-auto { padding: 8px 16px; background: var(--bg); border-top: 1px solid var(--line2); font-size: 11px; color: var(--muted2); font-style: italic; }
       .bp-empty { padding: 28px; color: var(--muted); }
       #preview { margin-top: 16px; }
+      /* ── Day 18: toolchain detection ─────────────────────────────────────── */
+      .tc-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line2); }
+      .tc-row:first-child { border-top: none; }
+      .tc-badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; letter-spacing: .02em; flex-shrink: 0; width: 78px; text-align: center; }
+      .tc-badge.present { background: var(--green-bg); color: var(--green-ink); }
+      .tc-badge.mismatch { background: var(--amber-bg); color: var(--amber-ink); }
+      .tc-badge.missing { background: #fef2f2; color: #b91c1c; }
+      .tc-tool { font-family: var(--mono); font-size: 13px; font-weight: 600; width: 72px; }
+      .tc-detail { font-size: 12.5px; color: var(--ink2); }
+      .tc-guide { font-size: 12px; color: var(--muted); }
+      .tc-guide a { color: var(--blue); }
+      .tc-container { margin-top: 14px; padding: 12px 14px; border-radius: 8px; font-size: 12.5px; }
+      .tc-container.available { background: var(--blue-bg); color: var(--blue-a); border: 1px solid #bfdbfe; }
+      .tc-container.none { background: var(--amber-bg); color: var(--amber-ink); border: 1px solid var(--amber-line); }
+      .tc-note { margin-top: 12px; font-size: 11.5px; color: var(--muted2); font-style: italic; }
       details.prev { margin-top: 12px; }
       details.prev summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink2); }
 
@@ -395,6 +410,20 @@
             <p>Assembled through the canonical <code>assembleBlueprint</code> path — byte-identical to the CLI.</p>
           </div>
           <div id="blueprint"><div class="card"><div class="bp-empty">No project yet — set settings or load an example.</div></div></div>
+
+          <!-- Day 18: toolchain detect-and-guide. Probes THIS machine for the runtimes the
+               blueprint's pins need; reports present/missing/mismatch + install links + the
+               container-build offer. DETECTION ONLY — it never changes what is generated. -->
+          <div class="card detect-card" style="margin-top:20px">
+            <div class="panel-head">
+              <span class="t">Can this machine build it? <span class="hint" style="font-weight:400">— toolchain detect-and-guide</span></span>
+              <button class="btn btn-secondary btn-sm" onclick="checkToolchains()">Check toolchains</button>
+            </div>
+            <div id="detectBody" class="card-body">
+              <div class="muted-sm">Detection reads your environment — it reports whether your machine can build the deterministically-generated project. It never changes what is generated.</div>
+            </div>
+          </div>
+
           <details class="prev">
             <summary>Preview generation (dry run — writes nothing)</summary>
             <div class="btn-row" style="margin-top:10px"><button class="btn btn-secondary btn-sm" onclick="preview()">See preview</button></div>
@@ -815,6 +844,9 @@
         // Entering the Blueprint screen assembles the model through the canonical path.
         if (n === 3) {
           try { await assemble(); } catch (e) { log(e.message, 'err'); return; }
+          // Reset the detect panel — a detection is per-blueprint (re-run for the new pins).
+          const db = document.getElementById('detectBody');
+          if (db) db.innerHTML = '<div class="muted-sm">Detection reads your environment — it reports whether your machine can build the deterministically-generated project. It never changes what is generated.</div>';
         }
         step = n;
         document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', Number(s.dataset.step) === n));
@@ -822,6 +854,43 @@
         window.scrollTo(0, 0);
         if (n === 2) renderChoices();
         if (n === 4) { loadFiles(); listVersions(); }
+      }
+
+      // ── Day 18: toolchain detect-and-guide → GET /api/detect ──────────────
+      // Probes THIS machine for the current blueprint's pinned toolchains and shows
+      // present/missing/mismatch + install links + the container-build offer. Pure
+      // detection — the report is SHOWN, never fed back into the blueprint/generation.
+      async function checkToolchains() {
+        const body = document.getElementById('detectBody');
+        body.innerHTML = '<div class="muted-sm">Probing your machine…</div>';
+        try {
+          const r = await api('GET', '/api/detect');
+          renderDetect(r);
+          log(`Toolchain detection: present ${r.summary.present}, missing ${r.summary.missing}, mismatch ${r.summary.mismatch}.`, 'ok');
+        } catch (e) { body.innerHTML = ''; log(e.message, 'err'); }
+      }
+      function renderDetect(r) {
+        const body = document.getElementById('detectBody');
+        body.innerHTML = '';
+        for (const t of r.tools) {
+          const row = document.createElement('div'); row.className = 'tc-row';
+          const badge = document.createElement('span'); badge.className = 'tc-badge ' + t.status; badge.textContent = t.status.toUpperCase();
+          const tool = document.createElement('span'); tool.className = 'tc-tool'; tool.textContent = t.tool;
+          const detail = document.createElement('span'); detail.className = 'tc-detail';
+          detail.textContent = t.detected ? `detected ${t.detected}` + (t.pin ? ` · pins ${t.pin}` : '') : 'not found' + (t.pin ? ` · pins ${t.pin}` : '');
+          row.appendChild(badge); row.appendChild(tool); row.appendChild(detail);
+          body.appendChild(row);
+          if (t.guidance) {
+            const g = document.createElement('div'); g.className = 'tc-guide'; g.style.paddingLeft = '88px';
+            g.innerHTML = t.guidance.message + ' <a href="' + t.guidance.installUrl + '" target="_blank" rel="noopener">install →</a>';
+            body.appendChild(g);
+          }
+        }
+        const c = document.createElement('div'); c.className = 'tc-container ' + (r.container.available ? 'available' : 'none');
+        c.textContent = r.container.message;
+        body.appendChild(c);
+        const note = document.createElement('div'); note.className = 'tc-note'; note.textContent = r.summary.note;
+        body.appendChild(note);
       }
 
       // ── preview / generate → /api/preview, /api/generate ──────────────────

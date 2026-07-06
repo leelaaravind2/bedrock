@@ -36,6 +36,7 @@ import { resolveVersions, type StackVersions } from './core/versions.js';
 import { applyProfile, fullOptionSet, existingDefaults, type OrgProfile } from './core/org-profile.js';
 import { assembleBlueprint, type BlueprintChoices } from './core/assemble.js';
 import { canonicalStringify } from './core/canonical-json.js';
+import { requiredToolchains, parseVersion, compareToPin, buildReport, type ProbeResult } from './detect/detect-core.js';
 import type { GeneratedFile } from './core/plugin.js';
 
 // ── The enumerated frozen-baseline set (43). Guard-the-guarded to source reports. ──
@@ -445,6 +446,78 @@ async function main(): Promise<void> {
     const expressNode20 = VERSION_BASELINES.find(([b, o]) => b === 'Express' && o.node === '20')![2];
     const ndOk = profileShaped && n1 === n2 && ndHash === expressNode20 && !leak;
     record(ndOk, 'NON-DEFAULT choices (profile-forced Express + node 20) → twice-identical == version baseline, NO profile metadata in output', ndHash.slice(0, 16) + (leak ? ` LEAK:${leak.relPath}` : ''));
+  }
+
+  // ══ PART 1j — toolchain detect-and-guide PURE CORE (Eco-Day 18) ══════════════
+  // Day 18 adds a DETECTION layer, NOT a generation change. The pure core (parse /
+  // compare-vs-pin / guidance / container-offer / requiredToolchains) is deterministic
+  // over CANNED probe outputs — fixture-tested here (no live machine), so its behaviour
+  // is CI-enforced. This asserts NOTHING about generation: the 49 digests above already
+  // prove buildFileSet is byte-identical (detection is additive; it has no write-path to
+  // the blueprint). A non-hash guard — like PART 1h (org-policy).
+  process.stdout.write('\n=== PART 1j: toolchain detect-and-guide pure core (Eco-Day 18) ===\n');
+  {
+    // (a) toolchains ≠ build-deps: a Spring blueprint requires the MACHINE tools
+    // (java/maven/node/docker/podman) — NEVER the framework-dep pins (springBoot/express/…).
+    const springState = buildDemoAppModel({ backend: 'Spring Boot', database: 'PostgreSQL' }).getState();
+    const reqTools = requiredToolchains(springState).map((r) => r.tool);
+    const hasMachineTools = ['java', 'maven', 'node', 'docker', 'podman'].every((t) => reqTools.includes(t));
+    const noBuildDeps = !reqTools.some((t) => ['springBoot', 'express', 'fastapi', 'django'].includes(t));
+    const javaPinned = requiredToolchains(springState).find((r) => r.tool === 'java')?.pin === '21'; // the Day-11 pin
+    record(hasMachineTools && noBuildDeps && javaPinned, 'requiredToolchains probes MACHINE tools (java pin 21, maven, node, docker/podman) — NOT framework-dep pins');
+
+    // (b) parseVersion across the real output shapes (java on STDERR is the gotcha).
+    const pv =
+      parseVersion('java', '', 'openjdk version "21.0.5" 2024-10-15\nOpenJDK Runtime Environment') === '21.0.5' &&
+      parseVersion('node', 'v22.14.0\n', '') === '22.14.0' &&
+      parseVersion('python', 'Python 3.12.4\n', '') === '3.12.4' &&
+      parseVersion('go', 'go version go1.22.1 windows/amd64\n', '') === '1.22.1' &&
+      parseVersion('maven', 'Apache Maven 3.9.6 (bc0240f)\n', '') === '3.9.6' &&
+      parseVersion('pip', 'pip 24.0 from C:\\... (python 3.12)\n', '') === '24.0' &&
+      parseVersion('docker', 'Docker version 27.0.3, build 7d4bcd8\n', '') === '27.0.3' &&
+      parseVersion('podman', 'podman version 5.0.1\n', '') === '5.0.1';
+    record(pv, 'parseVersion extracts the version from each probe shape (incl. java on STDERR)');
+
+    // (c) compareToPin semantics — pin granularity drives the compare (heuristic).
+    const cp =
+      compareToPin('21.0.5', '21') === 'present' &&   // major pin: patch/minor ignored
+      compareToPin('20.0.2', '21') === 'mismatch' &&  // wrong major
+      compareToPin(null, '21') === 'missing' &&       // not found
+      compareToPin('3.12.4', '3.12') === 'present' && // major.minor pin
+      compareToPin('3.11.9', '3.12') === 'mismatch' &&
+      compareToPin('1.22.1', '1.22') === 'present' &&
+      compareToPin('3.9.6', null) === 'present';      // presence-only tool (no pin)
+    record(cp, 'compareToPin present/missing/mismatch by pin granularity (major | major.minor)');
+
+    // (d) buildReport composes a full report — present/mismatch/guidance/container offer.
+    const probes = new Map<string, ProbeResult>([
+      ['java', { tool: 'java', found: true, rawStdout: '', rawStderr: 'openjdk version "21.0.5" 2024-10-15' }],
+      ['maven', { tool: 'maven', found: true, rawStdout: 'Apache Maven 3.9.6\n', rawStderr: '' }],
+      ['node', { tool: 'node', found: true, rawStdout: 'v20.11.0\n', rawStderr: '' }], // mismatch vs pin 22
+      ['docker', { tool: 'docker', found: true, rawStdout: 'Docker version 27.0.3, build 7d4bcd8\n', rawStderr: '' }],
+      ['podman', { tool: 'podman', found: false, rawStdout: '', rawStderr: '' }],
+    ]);
+    const report = buildReport(springState, probes);
+    const java = report.tools.find((t) => t.tool === 'java')!;
+    const node = report.tools.find((t) => t.tool === 'node')!;
+    const reportOk =
+      java.status === 'present' && java.guidance === null &&
+      node.status === 'mismatch' && !!node.guidance && /nodejs\.org/.test(node.guidance.installUrl) &&
+      report.container.available === true && report.container.runtime === 'docker' &&
+      report.summary.canBuildNatively === false && // node mismatch ⇒ can't build natively (heuristic)
+      /not a guarantee/i.test(report.summary.note); // determinism ≠ validity carried in the report
+    record(reportOk, 'buildReport: present(java)/mismatch(node+link)/container-offer(docker); canBuildNatively=false; validity-caveat carried');
+
+    // (e) missing runtime + no container ⇒ guidance link + honest "install a runtime" offer (never silent).
+    const noneProbes = new Map<string, ProbeResult>([
+      ['java', { tool: 'java', found: false, rawStdout: '', rawStderr: '' }],
+    ]);
+    const noneReport = buildReport(springState, noneProbes);
+    const javaMissing = noneReport.tools.find((t) => t.tool === 'java')!;
+    const missOk =
+      javaMissing.status === 'missing' && !!javaMissing.guidance && /adoptium\.net/.test(javaMissing.guidance.installUrl) &&
+      noneReport.container.available === false && /Install Docker or Podman/i.test(noneReport.container.message);
+    record(missOk, 'missing java → Adoptium link (never silent); no container runtime → install-a-runtime offer');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

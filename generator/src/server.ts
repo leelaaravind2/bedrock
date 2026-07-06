@@ -47,6 +47,7 @@ import type { BackendPlugin } from './core/plugin.js';
 import { assembleBlueprint, type BlueprintChoices } from './core/assemble.js';
 import { applyProfile, fullOptionSet, type OrgProfile } from './core/org-profile.js';
 import { DEFAULT_VERSIONS } from './core/versions.js';
+import { runLiveDetection } from './detect/probe.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)); // .../generator/dist
 const GENERATOR_DIR = path.join(HERE, '..');
@@ -247,6 +248,20 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     const choices = await readJson<BlueprintChoices>(req);
     model = assembleBlueprint(choices); // canonical, pure — identical to the CLI path
     sendJson(res, 200, { state: model.getState(), defaultsApplied: model.getDefaultsApplied() });
+    return;
+  }
+
+  // --- toolchain detect-and-guide (Day 18): the impure probe EDGE ---
+  //     Probes THIS machine for the toolchains the current blueprint needs, compares
+  //     against its Day-11 pins, and returns present/missing/mismatch + install links +
+  //     the container-build offer. This is a DETECTION layer: it reads the environment
+  //     and INFORMS — its result has NO write-path back to the blueprint (it never
+  //     touches assembleBlueprint/buildFileSet), so no machine-specific value can inject
+  //     nondeterminism into generation. Determinism ≠ validity: it reports whether the
+  //     machine CAN build the deterministically-generated project, never that it WILL.
+  if (route === 'GET /api/detect') {
+    const report = await runLiveDetection(requireModel().getState());
+    sendJson(res, 200, report);
     return;
   }
 

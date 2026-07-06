@@ -26,6 +26,7 @@
     "day20:regress": "node dist/day20-regression.js",
     "maxcell": "node dist/maxcell-driver.js",
     "gen:snapshot": "node dist/generate-from-snapshot.js",
+    "detect": "node dist/detect-demo.js",
     "ui": "node dist/server.js"
   },
   "devDependencies": {
