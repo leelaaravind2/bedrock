@@ -750,6 +750,65 @@ async function main(): Promise<void> {
     record(uiHash === cliHash && uiHash === HASMANY.Express.PostgreSQL, 'UI==CLI for has-many: assembleBlueprint == programmatic path, byte-identical', uiHash.slice(0, 16));
   }
 
+  // ══ PART 1n — decimal/money field type: exact NUMERIC(p,s) + string wire (Eco-Day 27) ══
+  // Exact decimals: NUMERIC(precision, scale) storage (never float, never `money`; scale ≥4
+  // default) with the value carried as a STRING on the wire — no float drift. The default
+  // (no decimal field) is a literal bypass — no frozen fixture uses Decimal, so the 60
+  // digests above are byte-identical. This records the additive decimal baselines (5×2).
+  process.stdout.write('\n=== PART 1n: decimal/money field type (Eco-Day 27 — 5 stacks × 2 DBs) ===\n');
+  {
+    // A decimal fixture: Product with a default-scale `price` (19,4) + a custom-precision
+    // `cost` (10,2) — exercising both the default and configurable precision/scale.
+    const dec = (backend: string, database: string) => {
+      const m = createProjectModel({ projectName: 'DemoApp', projectType: 'Web App', backend, frontend: 'React', database, multiUser: true, auth: 'Simple login' });
+      m.addEntity({ name: 'Product', fields: [
+        { name: 'name', type: 'String', required: true },
+        { name: 'price', type: 'Decimal', required: true },
+        { name: 'cost', type: 'Decimal', validation: { precision: 10, scale: 2 } },
+      ] });
+      return m;
+    };
+    const DECIMAL: Record<string, Record<string, string>> = {
+      'Spring Boot': { PostgreSQL: '1dec96da8fc6cdc458c525f4856e9cf42cf7a6aaee6ac9dcc4b63c62b4fc18c7', MySQL: 'b47c92f49ed12b1b46e262356df79d3d5e5614dbfb35e317ffad919693abbfbc' },
+      Express: { PostgreSQL: 'cf8f18639a09493fab613d0cb7a302146e4f8f47d43a320c2df87b8e6ea166ce', MySQL: '81f0ff4d061f64c6f0aa5acd2b7445d406203800742e2fc32a97e65d70f002b3' },
+      FastAPI: { PostgreSQL: '8c83311b8fa4e9379d29499289cc834f6d85143013006de4d9a191630e0f1668', MySQL: '7fe5a209ea989bc50e5a98a3473358603ca9f4f982114786d506197c01162c6d' },
+      Django: { PostgreSQL: '338c8edb756c7f8003bb07aeac1fbb8e79a42e419a99e1fed5fc847bacac6969', MySQL: '16d94375aa41f209d3f3924ad106f8bda560d5ab23ca918314a7f43f4e538df4' },
+      Go: { PostgreSQL: 'f9316be00c973cf93afe9f6a67f128a658324f6a87aa827afd79f49754c4f676', MySQL: 'f0747e84dfc3ce0038b286fabb1b1acc189ca5c3b25fcafd417281eb29fb6cc5' },
+    };
+    // (a) additive baselines: 5 stacks × 2 DBs, twice-identical == recorded.
+    for (const backend of Object.keys(DECIMAL)) {
+      for (const db of DATABASES) {
+        const a = hashFiles(await filesOf(dec(backend, db)));
+        const b = hashFiles(await filesOf(dec(backend, db)));
+        bake(`DECIMAL|${backend}|${db}`, a);
+        record(a === b && a === DECIMAL[backend][db], `${backend}|${db} decimal twice-identical == recorded additive baseline`, a.slice(0, 16));
+      }
+    }
+
+    // (b) EXACT storage — NUMERIC(p,s) everywhere, NEVER float/double/money (the whole point).
+    // Default price → (19,4); custom cost → (10,2). Django uses DecimalField(max_digits, decimal_places).
+    for (const backend of Object.keys(DECIMAL)) {
+      const pg = await filesOf(dec(backend, 'PostgreSQL'));
+      const my = await filesOf(dec(backend, 'MySQL'));
+      const all = [...pg, ...my].map((f) => f.content).join('\n');
+      const hasNumeric = backend === 'Django'
+        ? /DecimalField\(max_digits=19, decimal_places=4[,)]/.test(all) && /DecimalField\(max_digits=10, decimal_places=2[,)]/.test(all)
+        : /NUMERIC\(19, 4\)/.test(all) && /DECIMAL\(19, 4\)/.test(all) && /NUMERIC\(10, 2\)/.test(all);
+      const noFloat = !/\b(FLOAT|DOUBLE|REAL)\b/.test(all) && !/\bmoney\b/.test(all);
+      record(hasNumeric && noFloat, `${backend}: exact NUMERIC(p,s) storage (default 19/4 + configurable 10/2), NEVER float/money`);
+    }
+
+    // (c) STRING WIRE — the value never passes through a float (the exactness guarantee).
+    const spring = (await filesOf(dec('Spring Boot', 'PostgreSQL'))).find((f) => /ProductDto\.java$/.test(f.relPath))!.content;
+    const express = (await filesOf(dec('Express', 'PostgreSQL'))).find((f) => /product\.dto\.js$/.test(f.relPath))!.content;
+    const go = (await filesOf(dec('Go', 'PostgreSQL'))).find((f) => /product\.go$/.test(f.relPath))!.content;
+    const stringWire =
+      /@JsonSerialize\(using = ToStringSerializer\.class\)/.test(spring) &&   // Spring: BigDecimal → string
+      /must be a decimal string/.test(express) && /String\(body\./.test(express) && // Express: numeric-string + string storage
+      /Price string/.test(go);                                                // Go: string end-to-end
+    record(stringWire, 'string wire: Spring BigDecimal→ToStringSerializer, Express numeric-string, Go string (no float drift)');
+  }
+
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
   process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);

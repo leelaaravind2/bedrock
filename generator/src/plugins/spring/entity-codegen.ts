@@ -22,6 +22,7 @@
  */
 
 import type { Entity, Field, Relationship } from '../../core/project-model.js';
+import { decimalPrecision, decimalScale } from '../../core/project-model.js';
 import type { GeneratedFile } from '../../core/plugin.js';
 import type { SqlDialect } from '../../core/database.js';
 import { applyNaming, type NamingConvention } from '../../core/style.js';
@@ -258,6 +259,8 @@ function columnAnnotation(field: Field): string {
   if (field.required) attrs.push('nullable = false');
   if (field.unique) attrs.push('unique = true');
   if (field.type === 'String') attrs.push(`length = ${maxLengthOf(field)}`);
+  // Exact decimal (Day 27): @Column(precision, scale) → NUMERIC(p,s), default 19/4.
+  if (field.type === 'Decimal') attrs.push(`precision = ${decimalPrecision(field)}`, `scale = ${decimalScale(field)}`);
   return `    @Column(${attrs.join(', ')})`;
 }
 
@@ -411,8 +414,14 @@ function buildDto(entity: Entity, ctx: EntityCodegenContext): string {
   // do we emit @JsonProperty (and its import). Under 'default' — and for any
   // single-word field — nothing is emitted, so output stays byte-identical.
   const needJsonProperty = entity.fields.some((f) => wireKey(f, ctx) !== f.name);
+  // Exact decimal (Day 27): serialize BigDecimal as a STRING on the wire (Jackson emits it
+  // as a JSON number by default) — gated, so a Decimal-free DTO is byte-identical.
+  const needDecimal = entity.fields.some((f) => f.type === 'Decimal');
   const imports = [
     ...(needJsonProperty ? ['import com.fasterxml.jackson.annotation.JsonProperty;'] : []),
+    ...(needDecimal
+      ? ['import com.fasterxml.jackson.databind.annotation.JsonSerialize;', 'import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;']
+      : []),
     ...[...validationImports].sort().map((i) => `import ${i};`),
     ...typeImports(entity.fields, ['java.time.OffsetDateTime']),
   ];
@@ -427,6 +436,8 @@ function buildDto(entity: Entity, ctx: EntityCodegenContext): string {
     if (wire !== f.name) ann.push(`    @JsonProperty("${wire}")`);
     if (f.required) ann.push(isStringType(f.type) ? `    @NotBlank` : `    @NotNull`);
     if (isStringType(f.type)) ann.push(`    @Size(max = ${maxLengthOf(f)})`);
+    // Exact decimal (Day 27): BigDecimal → String on the wire (Jackson would emit a number).
+    if (f.type === 'Decimal') ann.push(`    @JsonSerialize(using = ToStringSerializer.class)`);
     const decl = `    private ${javaTypeOf(f.type).name} ${f.name};`;
     fieldDecls.push([...ann, decl].join('\n'));
   }
@@ -778,7 +789,7 @@ function buildMigration(entity: Entity, ctx: EntityCodegenContext): string {
   const cols: string[] = [`    id          ${ctx.sql.identityPrimaryKey()}`];
   for (const f of entity.fields) {
     const notNull = f.required ? ' NOT NULL' : '';
-    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, { maxLength: maxLengthOf(f) })}${notNull}`);
+    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, { maxLength: maxLengthOf(f), precision: decimalPrecision(f), scale: decimalScale(f) })}${notNull}`);
   }
   // Foreign-key columns for belongs-to relationships (authored order).
   for (const r of belongsToRels(entity)) {

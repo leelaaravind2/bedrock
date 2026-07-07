@@ -269,6 +269,30 @@ function isProvided(value: unknown): boolean {
 }
 
 /**
+ * The precision/scale for a Decimal field (Day 27) — read from the field's optional
+ * `validation.precision` / `validation.scale` (the same channel maxLength uses), with
+ * money-grade defaults: precision 19, scale 4 (scale ≥4). SHARED so every stack maps the
+ * SAME field to the SAME NUMERIC(precision, scale) and the SAME language precision/scale.
+ * Pure, total, deterministic. Only meaningful for Decimal fields.
+ */
+export function decimalPrecision(field: Field): number {
+  const v = field.validation;
+  if (v && typeof v === 'object' && 'precision' in v) {
+    const p = (v as { precision?: unknown }).precision;
+    if (typeof p === 'number' && Number.isInteger(p) && p > 0) return p;
+  }
+  return 19;
+}
+export function decimalScale(field: Field): number {
+  const v = field.validation;
+  if (v && typeof v === 'object' && 'scale' in v) {
+    const s = (v as { scale?: unknown }).scale;
+    if (typeof s === 'number' && Number.isInteger(s) && s >= 0) return s;
+  }
+  return 4; // scale ≥4 default (money-grade), never float
+}
+
+/**
  * Normalise one field spec into the model's field shape (per INTAKE-SPEC).
  * Mandatory: name, type. Defaults: required=false (optional), unique=false.
  * Optional: defaultValue (none), validation (sensible per-type default is

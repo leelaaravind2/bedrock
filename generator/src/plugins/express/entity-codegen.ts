@@ -19,6 +19,7 @@
  */
 
 import type { Entity, Field, Relationship } from '../../core/project-model.js';
+import { decimalPrecision, decimalScale } from '../../core/project-model.js';
 import type { GeneratedFile } from '../../core/plugin.js';
 import type { SqlDialect } from '../../core/database.js';
 import { applyNaming, type NamingConvention } from '../../core/style.js';
@@ -180,9 +181,14 @@ function maxLengthOf(field: Field): number {
 
 // SQL DDL column types now come from the selected database's SqlDialect (ctx.sql).
 
+/** The column-type opts for a field: maxLength (String) + precision/scale (Decimal — Day 27). */
+function colOpts(field: Field): { maxLength: number; precision: number; scale: number } {
+  return { maxLength: maxLengthOf(field), precision: decimalPrecision(field), scale: decimalScale(field) };
+}
+
 /** Validate that a field's type is supported (throws via the dialect). */
 function assertSupported(field: Field, sql: SqlDialect): void {
-  sql.columnType(field.type, { maxLength: maxLengthOf(field) }); // throws on unsupported
+  sql.columnType(field.type, colOpts(field)); // throws on unsupported
 }
 
 // ---------------------------------------------------------------------------
@@ -452,8 +458,15 @@ function validationLinesFor(field: Field, ctx: EntityCodegenContext): string[] {
     lines.push(`    errors.push('${w} must be an integer');`);
     lines.push(`  }`);
   } else if (typeLabel === 'Decimal') {
-    lines.push(`  if (body.${w} !== undefined && body.${w} !== null && typeof body.${w} !== 'number') {`);
-    lines.push(`    errors.push('${w} must be a number');`);
+    // Exact decimal (Day 27): the value is a numeric STRING end-to-end — never a JS float
+    // (which would lose precision). Stored in NUMERIC(p,s); node-postgres returns it as a
+    // string, so it round-trips exactly. Accept a numeric string (optionally a JS number,
+    // coerced to string) and normalise to string for the repository.
+    lines.push(`  if (body.${w} !== undefined && body.${w} !== null) {`);
+    lines.push(`    const ${w}Str = typeof body.${w} === 'number' ? String(body.${w}) : body.${w};`);
+    lines.push(`    if (typeof ${w}Str !== 'string' || !/^-?\\d+(\\.\\d+)?$/.test(${w}Str)) {`);
+    lines.push(`      errors.push('${w} must be a decimal string, e.g. "19.9900"');`);
+    lines.push(`    }`);
     lines.push(`  }`);
   } else if (typeLabel === 'Boolean') {
     lines.push(`  if (body.${w} !== undefined && body.${w} !== null && typeof body.${w} !== 'boolean') {`);
@@ -465,7 +478,13 @@ function validationLinesFor(field: Field, ctx: EntityCodegenContext): string[] {
     lines.push(`    errors.push('${w} must be an ISO date string');`);
     lines.push(`  }`);
   }
-  lines.push(`  data.${col} = body.${w} === undefined ? null : body.${w};`);
+  // Decimal (Day 27): store the value as a STRING so it never passes through a lossy JS
+  // float — NUMERIC(p,s) + a string round-trips exactly. Other types pass through as-is.
+  if (typeLabel === 'Decimal') {
+    lines.push(`  data.${col} = body.${w} === undefined || body.${w} === null ? null : String(body.${w});`);
+  } else {
+    lines.push(`  data.${col} = body.${w} === undefined ? null : body.${w};`);
+  }
   return lines;
 }
 
@@ -677,7 +696,7 @@ function buildMigration(entity: Entity, ctx: EntityCodegenContext): string {
   const cols: string[] = [`    id          ${ctx.sql.identityPrimaryKey()}`];
   for (const f of entity.fields) {
     const notNull = f.required ? ' NOT NULL' : '';
-    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, { maxLength: maxLengthOf(f) })}${notNull}`);
+    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, colOpts(f))}${notNull}`);
   }
   // Foreign-key columns for belongs-to relationships (authored order).
   for (const r of belongsToRels(entity)) {

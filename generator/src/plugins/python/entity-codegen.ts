@@ -20,6 +20,7 @@
  */
 
 import type { Entity, Field, Relationship } from '../../core/project-model.js';
+import { decimalPrecision, decimalScale } from '../../core/project-model.js';
 import type { GeneratedFile } from '../../core/plugin.js';
 import type { SqlDialect } from '../../core/database.js';
 import { applyNaming, type NamingConvention } from '../../core/style.js';
@@ -183,7 +184,10 @@ function sqlalchemyTypeOf(field: Field): { expr: string; imports: string[] } {
     case 'Long':
       return { expr: 'BigInteger', imports: ['BigInteger'] };
     case 'Decimal':
-      return { expr: 'Numeric(19, 2)', imports: ['Numeric'] };
+      // Exact decimal (Day 27): Numeric(precision, scale) → NUMERIC(p,s), default 19/4. The
+      // Pydantic annotation is Decimal (exact); Pydantic v2 serialises Decimal as a JSON
+      // STRING by default in FastAPI responses — exact, never float.
+      return { expr: `Numeric(${decimalPrecision(field)}, ${decimalScale(field)})`, imports: ['Numeric'] };
     case 'Boolean':
       return { expr: 'Boolean', imports: ['Boolean'] };
     case 'Date':
@@ -731,7 +735,7 @@ function buildMigration(entity: Entity, ctx: EntityCodegenContext): string {
   const cols: string[] = [`    id          ${ctx.sql.identityPrimaryKey()}`];
   for (const f of entity.fields) {
     const notNull = f.required ? ' NOT NULL' : '';
-    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, { maxLength: maxLengthOf(f) })}${notNull}`);
+    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, { maxLength: maxLengthOf(f), precision: decimalPrecision(f), scale: decimalScale(f) })}${notNull}`);
   }
   // Foreign-key columns for belongs-to relationships (authored order).
   for (const r of belongsToRels(entity)) {

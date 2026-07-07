@@ -23,6 +23,7 @@
  */
 
 import type { Entity, Field, Relationship } from '../../core/project-model.js';
+import { decimalPrecision, decimalScale } from '../../core/project-model.js';
 import type { GeneratedFile } from '../../core/plugin.js';
 import type { SqlDialect } from '../../core/database.js';
 import { applyNaming, type NamingConvention } from '../../core/style.js';
@@ -841,7 +842,7 @@ function buildMigration(entity: Entity, ctx: EntityCodegenContext): string {
   const cols: string[] = [`    id          ${ctx.sql.identityPrimaryKey()}`];
   for (const f of entity.fields) {
     const notNull = f.required ? ' NOT NULL' : '';
-    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, { maxLength: maxLengthOf(f) })}${notNull}`);
+    cols.push(`    ${columnName(f)} ${ctx.sql.columnType(f.type, { maxLength: maxLengthOf(f), precision: decimalPrecision(f), scale: decimalScale(f) })}${notNull}`);
   }
   // Foreign-key columns for belongs-to relationships (authored order).
   for (const r of belongsToRels(entity)) {

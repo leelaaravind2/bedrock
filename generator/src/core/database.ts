@@ -15,8 +15,12 @@
 
 /** The SQL-dialect pieces the SQL-migration backends assemble their DDL from. */
 export interface SqlDialect {
-  /** Column type for a logical field type (String/Text/Integer/Long/Decimal/Boolean/Date/DateTime). */
-  columnType(logicalType: string, opts?: { maxLength?: number }): string;
+  /**
+   * Column type for a logical field type (String/Text/Integer/Long/Decimal/Boolean/Date/DateTime).
+   * `maxLength` sizes String; `precision`/`scale` size Decimal → NUMERIC(precision, scale)
+   * (Day 27, default 19/4 — exact, never float/money). Absent keys use the type's default.
+   */
+  columnType(logicalType: string, opts?: { maxLength?: number; precision?: number; scale?: number }): string;
   /** The auto-increment primary-key column definition (type + identity + PK). */
   identityPrimaryKey(): string;
   /** The plain 64-bit integer type used for FK / owner columns. */

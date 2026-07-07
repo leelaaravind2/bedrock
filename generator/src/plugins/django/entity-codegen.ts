@@ -25,6 +25,7 @@
  */
 
 import type { Entity, Field, Relationship } from '../../core/project-model.js';
+import { decimalPrecision, decimalScale } from '../../core/project-model.js';
 import type { GeneratedFile } from '../../core/plugin.js';
 import { applyNaming, type NamingConvention } from '../../core/style.js';
 
@@ -96,7 +97,10 @@ function djangoFieldParts(field: Field): { cls: string; typeArgs: string[] } {
     case 'Long':
       return { cls: 'BigIntegerField', typeArgs: [] };
     case 'Decimal':
-      return { cls: 'DecimalField', typeArgs: ['max_digits=19', 'decimal_places=2'] };
+      // Exact decimal (Day 27): DecimalField(max_digits=precision, decimal_places=scale),
+      // default 19/4. Django maps this to NUMERIC(p,s); DRF serializes it as a STRING by
+      // default (COERCE_DECIMAL_TO_STRING) — exact, never float.
+      return { cls: 'DecimalField', typeArgs: [`max_digits=${decimalPrecision(field)}`, `decimal_places=${decimalScale(field)}`] };
     case 'Boolean':
       return { cls: 'BooleanField', typeArgs: [] };
     case 'Date':
@@ -295,7 +299,7 @@ function drfFieldClass(field: Field): string {
  */
 function drfFieldExpr(field: Field, attr: string): string {
   const args = [`source="${attr}"`];
-  if (field.type === 'Decimal') args.push('max_digits=19', 'decimal_places=2');
+  if (field.type === 'Decimal') args.push(`max_digits=${decimalPrecision(field)}`, `decimal_places=${decimalScale(field)}`);
   if (field.type === 'String') args.push(`max_length=${maxLengthOf(field)}`);
   if (!field.required) args.push('required=False', 'allow_null=True');
   return `serializers.${drfFieldClass(field)}(${args.join(', ')})`;

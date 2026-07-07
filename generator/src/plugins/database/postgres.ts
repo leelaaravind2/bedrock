@@ -56,7 +56,9 @@ export const postgresProvider: DatabaseProvider = {
         case 'Long':
           return 'BIGINT';
         case 'Decimal':
-          return 'NUMERIC(19, 2)';
+          // Exact decimal (Day 27): NUMERIC(precision, scale) — never float, never `money`.
+          // Default 19/4 (scale ≥4, money-grade). Configurable per field.
+          return `NUMERIC(${opts?.precision ?? 19}, ${opts?.scale ?? 4})`;
         case 'Boolean':
           return 'BOOLEAN';
         case 'Date':

@@ -67,7 +67,9 @@ export const mySqlProvider: DatabaseProvider = {
         case 'Long':
           return 'BIGINT';
         case 'Decimal':
-          return 'DECIMAL(19, 2)';
+          // Exact decimal (Day 27): DECIMAL(precision, scale) — never float, never `money`.
+          // Default 19/4 (scale ≥4, money-grade). Configurable per field.
+          return `DECIMAL(${opts?.precision ?? 19}, ${opts?.scale ?? 4})`;
         case 'Boolean':
           return 'TINYINT(1)';
         case 'Date':
