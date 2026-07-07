@@ -25,6 +25,7 @@ import type { DatabaseProvider } from '../../core/database.js';
 import { postgresProvider } from '../database/postgres.js';
 import {
   generateEntityFiles,
+  generateWorkerEntityFiles,
   describeEntityDefaults as describeSpringEntityDefaults,
   type EntityCodegenContext,
 } from './entity-codegen.js';
@@ -148,6 +149,65 @@ async function walk(dir: string): Promise<string[]> {
   return files;
 }
 
+// ---------------------------------------------------------------------------
+// Worker archetypes (Day 34, pass 2). cron-worker + queue-consumer swap the HTTP
+// controller layer for a @Scheduled job (cron) / @RabbitListener (queue) — both
+// component-scanned, the worker analog of an auto-registered @RestController — so
+// the shell change is small: cron adds @EnableScheduling to the application class;
+// queue adds spring-boot-starter-amqp (a GATED generated-project dependency in
+// pom.xml). Workers are frontendless (isFrontendless is already true → the Day-15
+// frontend subtraction applies), so the worker shell = the api-only shell + these
+// hooks. A LITERAL BYPASS for 'Web App'/'API-only'. Generation-only (no JDK here).
+// ---------------------------------------------------------------------------
+
+/** Add @EnableScheduling to the Spring application class (cron-worker). */
+function enableScheduling(raw: string): string {
+  return raw
+    .replace(
+      `import org.springframework.boot.autoconfigure.SpringBootApplication;`,
+      `import org.springframework.boot.autoconfigure.SpringBootApplication;\nimport org.springframework.scheduling.annotation.EnableScheduling;`,
+    )
+    .replace(`@SpringBootApplication\npublic class`, `@SpringBootApplication\n@EnableScheduling\npublic class`);
+}
+
+/** Add spring-boot-starter-amqp to pom.xml (queue-consumer) — a gated GENERATED-PROJECT dep. */
+function addAmqpStarter(raw: string): string {
+  return raw.replace(
+    `        <dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-actuator</artifactId>\n        </dependency>`,
+    `        <dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-actuator</artifactId>\n        </dependency>\n        <dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-amqp</artifactId>\n        </dependency>`,
+  );
+}
+
+/** Append a truthful worker section to the Spring README. */
+function addWorkerReadmeSpring(raw: string, kind: 'cron' | 'queue'): string {
+  const lines =
+    kind === 'cron'
+      ? [
+          ``,
+          `## Cron worker (project type: Cron Worker)`,
+          ``,
+          `This backend is a **scheduler**: the application class is annotated`,
+          `\`@EnableScheduling\`, and each entity ships a \`<Name>Job\` \`@Component\` whose`,
+          `\`@Scheduled\` \`run()\` scans the SAME \`<Name>Repository\` the HTTP API's service`,
+          `uses (\`spring.datasource.*\` still drives the DB). No REST controllers are`,
+          `generated. Interval: \`cron.interval.ms\` (default 60000).`,
+          ``,
+        ]
+      : [
+          ``,
+          `## Queue consumer (project type: Queue Consumer)`,
+          ``,
+          `This backend is a **message consumer**: it adds \`spring-boot-starter-amqp\`,`,
+          `and each entity ships a \`<Name>Listener\` \`@Component\` whose \`@RabbitListener\``,
+          `consumes \`<name>.created\` into the SAME \`<Name>Dto\` + \`<Name>Repository\` the`,
+          `HTTP API's service uses. Spring AMQP provides **ack / retry (redelivery) /`,
+          `dead-letter (DLX)** declaratively. Configure the broker via`,
+          `\`spring.rabbitmq.*\`. No REST controllers are generated.`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 export interface SpringPluginOptions {
   /**
    * Absolute path to this plugin's template shell directory. Optional — when
@@ -177,6 +237,13 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
       // Day 15: API-only (frontend === 'None') subtracts the frontend slice. This
       // is a LITERAL BYPASS otherwise — Web-App runs the exact original walk.
       const apiOnly = isFrontendless(model);
+      // Day 34: worker types (also frontendless → apiOnly true) add a small hook to
+      // the shell: cron → @EnableScheduling on the application class; queue →
+      // spring-boot-starter-amqp in pom.xml. A LITERAL BYPASS otherwise. The entity
+      // controller layer is swapped for a @Scheduled/@RabbitListener in generateEntity.
+      const projectType = model.getPhaseASettings().projectType;
+      const workerKind: 'cron' | 'queue' | null =
+        projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
@@ -184,6 +251,11 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
         let raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
         if (apiOnly && relRaw === 'docker-compose.yml') raw = stripComposeFrontend(raw);
         if (apiOnly && relRaw === 'README.md') raw = apiOnlyReadme(raw);
+        if (workerKind) {
+          if (workerKind === 'cron' && relRaw.endsWith('Application.java')) raw = enableScheduling(raw);
+          else if (workerKind === 'queue' && relRaw === 'backend/pom.xml') raw = addAmqpStarter(raw);
+          else if (relRaw === 'README.md') raw = addWorkerReadmeSpring(raw, workerKind);
+        }
         const relOut = applyTokens(relRaw, tokens);
         const content = applyTokens(raw, tokens);
         files.push({ relPath: relOut, content, ownership: 'thraksha' });
@@ -202,6 +274,10 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
         sql: database.sql,
         naming: context.style.namingConvention, // Day 12: wire-key naming
       };
+      // Day 34: worker types swap the entity controller layer for a @Scheduled job
+      // / @RabbitListener, reusing the domain files byte-identically. Bypass otherwise.
+      if (context.projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
+      if (context.projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
       return generateEntityFiles(entity, ctx);
     },
 

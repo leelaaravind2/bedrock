@@ -120,6 +120,50 @@ const WORKER: Record<string, string> = {
   'Queue Consumer': '799ef9873a6ccc28b3d7fd2b537f0c4fb8bc7f5d4304c3db49129c91bd44d6c5',
 };
 
+// Worker archetypes for the other 4 stacks (Eco-Day 34 pass 2) — Go/FastAPI/Django/
+// Spring × cron/queue (DemoApp, PG). ADDITIVE twice-identical baselines; generation-only
+// (no Go/Java toolchain, heavy Python — determinism proven via baselines + domain-reuse,
+// not compiled/booted, honest per §4). `rewritten` = the shell files that legitimately
+// differ from the api-only twin (entrypoint/manifest/package/readme); `http`/`worker` are
+// the swapped-layer file markers proving the entrypoint/route→worker projection.
+interface WorkerStack {
+  cron: string;
+  queue: string;
+  rewritten: RegExp;
+  http: RegExp; // the HTTP route/controller file the worker removes
+  worker: { cron: RegExp; queue: RegExp }; // the worker file added
+}
+const WORKER_STACKS: Record<string, WorkerStack> = {
+  Go: {
+    cron: '2166268f486558b1a22c2886d2eb890549628a5fb8520d2339db2042459205f3',
+    queue: '70b13ecd004be67de00f96e351ecd476d2dde3b669d2a4329cb76b2e5ecf821e',
+    rewritten: /GENERATION-MANIFEST|README|go\.mod|(^|\/)main\.go$/,
+    http: /handler_base\.go$/,
+    worker: { cron: /\/job\.go$/, queue: /\/handler\.go$/ },
+  },
+  FastAPI: {
+    cron: '8cf75cd681ceefc6d312c072e8d6450a8e1592b86bdbe5ee936dd13e3c59f421',
+    queue: '7bbfa9623ca9ec4b94afa323f9ce75bf326a5a6799a1f7ae45c64ddbbe584330',
+    rewritten: /GENERATION-MANIFEST|README|requirements\.txt|(^|\/)app\/main\.py$/,
+    http: /router_base\.py$/,
+    worker: { cron: /\/job\.py$/, queue: /\/handler\.py$/ },
+  },
+  Django: {
+    cron: 'c54249e23203179102b1ac46e9d9ad5dbf77a253522e2e23fc55ba2b1c32fab0',
+    queue: '4d13ff89c2618b95497683f08a6f28551c7291cb4dfeee0b192cdac125da0f69',
+    rewritten: /GENERATION-MANIFEST|README|requirements\.txt/,
+    http: /views_base\.py$/,
+    worker: { cron: /\/job\.py$/, queue: /\/handler\.py$/ },
+  },
+  'Spring Boot': {
+    cron: '86a4bf9d9e88d2a57eb3d85f64da39bb4d4a13c545802869fcce57cacf409685',
+    queue: '1e0379535672cfd5b0cb791308b5108205f54705a94a37d3040ff35e5bfdbbd1',
+    rewritten: /GENERATION-MANIFEST|README|pom\.xml|Application\.java$/,
+    http: /ControllerBase\.java$/,
+    worker: { cron: /Job\.java$/, queue: /Listener\.java$/ },
+  },
+};
+
 // The canonical MAXIMAL-composition baseline (Eco-Day 1) — the reproducible
 // replacement for the retired, record-only, un-reproducible `33f3ec4b…`. Its input
 // is the committed fixture in maxcell-fixture.ts (Express + snake_case + multi-edge FK).
@@ -1006,6 +1050,37 @@ async function main(): Promise<void> {
     const cronPkg = (await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'Cron Worker' }))).find((f) => f.relPath === 'package.json')?.content ?? '';
     record(/"amqplib":/.test(queuePkg) && /"main": "src\/worker.js"/.test(queuePkg) && !/"amqplib":/.test(cronPkg) && /"main": "src\/worker.js"/.test(cronPkg),
       'gated deps: queue adds amqplib (generated-project dep); cron adds none (setInterval builtin); both repoint main→worker.js');
+  }
+
+  // ── PART 1q (pass 2) — the other 4 stacks: Go/FastAPI/Django/Spring × cron/queue ──
+  // Generation-only (no toolchain to boot/compile these here) — determinism proven via
+  // the twice-identical baselines + the domain-reuse diff, exactly as pass 1 did for Express.
+  process.stdout.write('\n=== PART 1q (pass 2): worker archetypes — Go/FastAPI/Django/Spring (Eco-Day 34 — generation-only) ===\n');
+  for (const backend of ['Go', 'FastAPI', 'Django', 'Spring Boot']) {
+    const cfg = WORKER_STACKS[backend];
+    const apiTwin = toMap(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: 'API-only' })));
+    for (const pt of ['Cron Worker', 'Queue Consumer'] as const) {
+      const kind: 'cron' | 'queue' = pt === 'Cron Worker' ? 'cron' : 'queue';
+      // (a) twice-identical == recorded additive baseline.
+      const a = hashFiles(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: pt })));
+      const b = hashFiles(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: pt })));
+      const expected = kind === 'cron' ? cfg.cron : cfg.queue;
+      bake(`worker|${backend}|${pt}`, a);
+      record(a === b && a === expected, `${backend.padEnd(11)} ${pt.padEnd(14)} twice-identical == recorded additive baseline`, a.slice(0, 16));
+
+      // (b) DOMAIN-REUSE: shared files identical except the legit-rewritten shell files;
+      // the HTTP route/controller layer is removed; the worker file is added.
+      const wk = toMap(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: pt })));
+      let domainIdentical = true;
+      for (const [p, c] of apiTwin) if (wk.has(p) && !cfg.rewritten.test(p) && wk.get(p) !== c) domainIdentical = false;
+      const removed = [...apiTwin.keys()].filter((p) => !wk.has(p));
+      const added = [...wk.keys()].filter((p) => !apiTwin.has(p));
+      const httpRemoved = removed.some((p) => cfg.http.test(p));
+      const workerAdded = added.some((p) => cfg.worker[kind].test(p));
+      record(domainIdentical && httpRemoved && workerAdded,
+        `${backend.padEnd(11)} ${pt.padEnd(14)} DOMAIN-REUSE: domain byte-identical to api-only twin; only entrypoint+route/handler swapped`,
+        `(-${removed.length} +${added.length})`);
+    }
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

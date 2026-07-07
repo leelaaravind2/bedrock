@@ -1022,6 +1022,121 @@ export function generateEntityFiles(entity: Entity, ctx: EntityCodegenContext): 
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Worker archetypes (Day 34, pass 2) — cron-worker + queue-consumer. Both REUSE
+// the domain layer BYTE-IDENTICALLY (__init__/model/schemas/repository/
+// service_base + the migration + the developer service.py) and swap ONLY the HTTP
+// route layer (router_base.py + the dev routes.py) for a worker file:
+//   - cron:  job.py     — run(): an idempotent scan over the domain service.
+//   - queue: handler.py — a topic→handler map calling the domain service.
+// ---------------------------------------------------------------------------
+
+/** The idempotent cron job for one entity (job.py) — an idempotent scan over the domain service. */
+function buildCronJob(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const listArgs = ctx.multiUser ? 'db, 0' : 'db';
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `Cron job for ${name}: an idempotent scan over the SAME domain service the HTTP`,
+    `API uses (service.py). No HTTP route — the scheduler calls run() each tick.`,
+    `"""`,
+    `from ...db import SessionLocal`,
+    `from .service import ${slug}_service`,
+    ``,
+    ``,
+    `def run() -> int:`,
+    `    """Idempotent: list the current ${name} rows via the domain service and`,
+    `    process each. Re-running produces the same effect."""`,
+    `    db = SessionLocal()`,
+    `    try:`,
+    `        items = ${slug}_service.list(${listArgs})`,
+    `        for item in items:`,
+    `            process_item(item)`,
+    `        return len(items)`,
+    `    finally:`,
+    `        db.close()`,
+    ``,
+    ``,
+    `def process_item(item) -> None:`,
+    `    # Idempotent per-item work goes here (default: a no-op scan).`,
+    `    return None`,
+    ``,
+  ].join('\n');
+}
+
+/** The queue topic→handler map for one entity (handler.py) — each handler calls the domain service. */
+function buildQueueHandler(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const createArgs = ctx.multiUser ? 'db, data, 0' : 'db, data';
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `Queue handlers for ${name}: a topic→handler map calling the SAME domain service`,
+    `the HTTP API uses (service.py). No HTTP route — the dispatcher routes each`,
+    `message topic to its handler with ack/retry/dead-letter.`,
+    `"""`,
+    `from ...db import SessionLocal`,
+    `from .schemas import ${name}Create`,
+    `from .service import ${slug}_service`,
+    ``,
+    ``,
+    `def _create(payload: dict):`,
+    `    """Process a ${slug}.created message: validate the payload (exactly as an`,
+    `    HTTP body) and create through the domain service."""`,
+    `    db = SessionLocal()`,
+    `    try:`,
+    `        data = ${name}Create(**payload).model_dump()`,
+    `        return ${slug}_service.create(${createArgs})`,
+    `    finally:`,
+    `        db.close()`,
+    ``,
+    ``,
+    `handlers = {`,
+    `    "${slug}.created": _create,`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/**
+ * The worker entity file set (Day 34): the domain layer BYTE-IDENTICAL to the
+ * default/api-only file set, MINUS the HTTP route layer (router_base.py + the dev
+ * routes.py), PLUS the worker file (job.py / handler.py).
+ */
+export function generateWorkerEntityFiles(
+  entity: Entity,
+  ctx: EntityCodegenContext,
+  kind: 'cron' | 'queue',
+): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  const dir = `app/entities/${slug}`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+
+  const workerLayer: GeneratedFile[] =
+    kind === 'cron'
+      ? [{ relPath: `${dir}/job.py`, content: buildCronJob(entity, ctx), ownership: 'thraksha' }]
+      : [{ relPath: `${dir}/handler.py`, content: buildQueueHandler(entity, ctx), ownership: 'thraksha' }];
+
+  return [
+    // Domain layer — BYTE-IDENTICAL to the api-only twin (same builders/ctx).
+    { relPath: `${dir}/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/model.py`, content: buildModel(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/schemas.py`, content: buildSchemas(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/repository.py`, content: buildRepository(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/service_base.py`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `migrations/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    // The developer service seam — reused unchanged (the job/handler wraps it).
+    { relPath: `${dir}/service.py`, content: buildServiceDev(entity), ownership: 'developer' },
+    // Swapped: the worker file replaces router_base.py + the dev routes.py.
+    ...workerLayer,
+  ];
+}
+
 /**
  * architectureDepth: 'simple' file set (Day 13) — flatter: no repository.py;
  * service_base.py + router_base.py merged into crud_base.py. The developer seam

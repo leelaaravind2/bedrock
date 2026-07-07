@@ -21,6 +21,7 @@ import type { DatabaseProvider } from '../../core/database.js';
 import { postgresProvider } from '../database/postgres.js';
 import {
   generateEntityFiles,
+  generateWorkerEntityFiles,
   describeEntityDefaults as describeDjangoEntityDefaults,
 } from './entity-codegen.js';
 
@@ -69,6 +70,261 @@ async function walk(dir: string): Promise<string[]> {
   return files;
 }
 
+// ---------------------------------------------------------------------------
+// Worker archetypes (Day 34, pass 2). cron-worker + queue-consumer add a root
+// worker entrypoint (python worker.py) that runs django.setup() then a scheduler
+// loop (stdlib time — NO dep) or a broker consume loop. The entity HTTP view layer
+// (views_base/views/urls) is swapped for a job/handler; the Django web scaffolding
+// (manage.py/config) is RETAINED — Django needs it for the ORM + migrations
+// (run via `python manage.py migrate`). A LITERAL BYPASS for 'Web App'/'API-only'.
+// Generation-only (no Python toolchain booted here). pika is a GENERATED-PROJECT
+// dep gated on the queue type (Thraksha core stays deps {}).
+// ---------------------------------------------------------------------------
+
+/** cron-worker entrypoint (worker.py): django.setup() → run once → time loop (stdlib). */
+const CRON_WORKER_PY = [
+  `"""Entry point (cron-worker): set up Django, then run the scheduler loop.`,
+  ``,
+  `Uses the standard library (time) — NO scheduler dependency. Apply migrations`,
+  `first with: python manage.py migrate. Then run: python worker.py`,
+  `"""`,
+  `import os`,
+  `import time`,
+  ``,
+  `import django`,
+  ``,
+  `os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")`,
+  `django.setup()`,
+  ``,
+  `from scheduler import run_all  # noqa: E402 (must follow django.setup())`,
+  ``,
+  `INTERVAL_SECONDS = 60`,
+  ``,
+  ``,
+  `def main() -> None:`,
+  `    run_all()  # run once at startup`,
+  `    while True:`,
+  `        time.sleep(INTERVAL_SECONDS)`,
+  `        run_all()`,
+  ``,
+  ``,
+  `if __name__ == "__main__":`,
+  `    main()`,
+  ``,
+].join('\n');
+
+/** cron-worker job table (scheduler.py): auto-discovers entities/<name>/job.py. */
+const CRON_SCHEDULER_PY = [
+  `"""The job table (auto-discovers entities/<name>/job.py) — the cron analog of the`,
+  `URL auto-include. Runs each entity job in sorted (deterministic) order."""`,
+  `import importlib`,
+  `import os`,
+  `from pathlib import Path`,
+  ``,
+  `BASE_DIR = Path(__file__).resolve().parent`,
+  ``,
+  ``,
+  `def _load_jobs():`,
+  `    jobs = []`,
+  `    entities_dir = BASE_DIR / "entities"`,
+  `    if entities_dir.is_dir():`,
+  `        for name in sorted(os.listdir(entities_dir)):`,
+  `            if (entities_dir / name / "job.py").is_file():`,
+  `                module = importlib.import_module(f"entities.{name}.job")`,
+  `                jobs.append((name, module))`,
+  `    return jobs`,
+  ``,
+  ``,
+  `def run_all() -> int:`,
+  `    processed = 0`,
+  `    for name, module in _load_jobs():`,
+  `        n = module.run()`,
+  `        processed += n or 0`,
+  `        print(f"cron job {name} processed {n}")`,
+  `    return processed`,
+  ``,
+].join('\n');
+
+/** queue-consumer entrypoint (worker.py): django.setup() → consume. */
+const QUEUE_WORKER_PY = [
+  `"""Entry point (queue-consumer): set up Django, then consume.`,
+  ``,
+  `Apply migrations first with: python manage.py migrate. Then run: python worker.py`,
+  `"""`,
+  `import os`,
+  ``,
+  `import django`,
+  ``,
+  `os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")`,
+  `django.setup()`,
+  ``,
+  `from broker import consume  # noqa: E402 (must follow django.setup())`,
+  ``,
+  ``,
+  `def main() -> None:`,
+  `    consume()`,
+  ``,
+  ``,
+  `if __name__ == "__main__":`,
+  `    main()`,
+  ``,
+].join('\n');
+
+/** queue-consumer dispatcher (dispatcher.py): topic→handler table + ack/retry/dead-letter. */
+const QUEUE_DISPATCHER_PY = [
+  `"""The topic→handler table (auto-discovers entities/<name>/handler.py) — the queue`,
+  `analog of the URL auto-include — plus dispatch() with ack / retry / dead-letter`,
+  `(broker-agnostic, so it is unit-testable with a stub broker)."""`,
+  `import importlib`,
+  `import os`,
+  `from pathlib import Path`,
+  ``,
+  `BASE_DIR = Path(__file__).resolve().parent`,
+  ``,
+  `MAX_ATTEMPTS = 3`,
+  ``,
+  ``,
+  `def load_handlers() -> dict:`,
+  `    table = {}`,
+  `    entities_dir = BASE_DIR / "entities"`,
+  `    if entities_dir.is_dir():`,
+  `        for name in sorted(os.listdir(entities_dir)):`,
+  `            if (entities_dir / name / "handler.py").is_file():`,
+  `                module = importlib.import_module(f"entities.{name}.handler")`,
+  `                for topic in sorted(module.handlers):`,
+  `                    table[topic] = module.handlers[topic]`,
+  `    return table`,
+  ``,
+  ``,
+  `HANDLERS = load_handlers()`,
+  ``,
+  ``,
+  `def topics() -> list:`,
+  `    return sorted(HANDLERS)`,
+  ``,
+  ``,
+  `def dispatch(topic: str, payload: dict, broker, attempt: int = 0) -> str:`,
+  `    """Run one message through its handler: success -> ack; a transient failure ->`,
+  `    retry up to MAX_ATTEMPTS; a poison message (exhausted, or no handler) ->`,
+  `    dead-letter. The broker supplies ack/retry/dead_letter."""`,
+  `    handler = HANDLERS.get(topic)`,
+  `    if handler is None:`,
+  `        broker.dead_letter(topic, payload, "no handler for topic")`,
+  `        return "dead-letter"`,
+  `    attempt += 1`,
+  `    try:`,
+  `        handler(payload)`,
+  `        broker.ack(topic, payload)`,
+  `        return "ack"`,
+  `    except Exception as exc:  # noqa: BLE001 (transient vs poison decided by attempt)`,
+  `        if attempt < MAX_ATTEMPTS:`,
+  `            broker.retry(topic, payload, attempt)`,
+  `            return "retry"`,
+  `        broker.dead_letter(topic, payload, str(exc))`,
+  `        return "dead-letter"`,
+  ``,
+].join('\n');
+
+/** queue-consumer broker (broker.py): pika connection, WIRED but INERT until QUEUE_URL set. */
+const QUEUE_BROKER_PY = [
+  `"""The broker connection (AMQP / RabbitMQ via pika). WIRED but INERT until`,
+  `QUEUE_URL is set. The dispatch loop (dispatcher.py) is broker-agnostic. pika is a`,
+  `GENERATED-PROJECT dependency (requirements.txt), never Thraksha's."""`,
+  `import json`,
+  `import os`,
+  ``,
+  `import pika`,
+  ``,
+  `from dispatcher import dispatch, topics`,
+  ``,
+  ``,
+  `class _PikaBroker:`,
+  `    def __init__(self, channel):`,
+  `        self.channel = channel`,
+  ``,
+  `    def ack(self, topic, payload) -> None:`,
+  `        pass  # the delivery is acked in _on_message`,
+  ``,
+  `    def retry(self, topic, payload, attempt) -> None:`,
+  `        self.channel.basic_publish(`,
+  `            exchange="", routing_key=topic, body=json.dumps(payload),`,
+  `            properties=pika.BasicProperties(headers={"attempt": str(attempt)}),`,
+  `        )`,
+  ``,
+  `    def dead_letter(self, topic, payload, reason) -> None:`,
+  `        self.channel.queue_declare(queue=topic + ".dead", durable=True)`,
+  `        self.channel.basic_publish(`,
+  `            exchange="", routing_key=topic + ".dead",`,
+  `            body=json.dumps({"payload": payload, "reason": reason}),`,
+  `        )`,
+  ``,
+  ``,
+  `def _on_message(broker, topic, method, props, body) -> None:`,
+  `    payload = json.loads(body)`,
+  `    attempt = 0`,
+  `    if props.headers and "attempt" in props.headers:`,
+  `        attempt = int(props.headers["attempt"])`,
+  `    dispatch(topic, payload, broker, attempt)`,
+  `    broker.channel.basic_ack(method.delivery_tag)`,
+  ``,
+  ``,
+  `def consume() -> None:`,
+  `    url = os.environ.get("QUEUE_URL", "")`,
+  `    if not url:`,
+  `        raise RuntimeError("Queue is not configured — set QUEUE_URL in the environment.")`,
+  `    connection = pika.BlockingConnection(pika.URLParameters(url))`,
+  `    channel = connection.channel()`,
+  `    broker = _PikaBroker(channel)`,
+  `    for topic in topics():`,
+  `        channel.queue_declare(queue=topic, durable=True)`,
+  `        channel.basic_consume(`,
+  `            queue=topic,`,
+  `            on_message_callback=lambda ch, method, props, body, _t=topic: _on_message(`,
+  `                broker, _t, method, props, body`,
+  `            ),`,
+  `        )`,
+  `    print(f"queue consumer started ({len(topics())} topics)")`,
+  `    channel.start_consuming()`,
+  ``,
+].join('\n');
+
+/** Add pika to requirements.txt (queue only) — a gated GENERATED-PROJECT dep. */
+function addPikaRequire(raw: string): string {
+  return raw.trimEnd() + '\n' + 'pika==1.3.2\n';
+}
+
+/** Append a truthful worker section to the Django README. */
+function addWorkerReadmeDj(raw: string, kind: 'cron' | 'queue'): string {
+  const lines =
+    kind === 'cron'
+      ? [
+          ``,
+          `## Cron worker (project type: Cron Worker)`,
+          ``,
+          `This is a **scheduler**, not a web server. Apply migrations with`,
+          `\`python manage.py migrate\`, then run \`python worker.py\`: it calls`,
+          `\`django.setup()\` and ticks every 60s via the standard library (\`time\`) —`,
+          `**no scheduler dependency**. \`scheduler.py\` auto-discovers every`,
+          `\`entities/<name>/job.py\` and runs its idempotent \`run()\` over the SAME ORM`,
+          `models the HTTP API uses. (The Django web scaffolding is retained for the ORM.)`,
+          ``,
+        ]
+      : [
+          ``,
+          `## Queue consumer (project type: Queue Consumer)`,
+          ``,
+          `This is a **message consumer**, not a web server. Apply migrations with`,
+          `\`python manage.py migrate\`, then run \`python worker.py\`: it calls`,
+          `\`django.setup()\` and connects to the broker (\`broker.py\`, AMQP/RabbitMQ via`,
+          `\`pika\` — set \`QUEUE_URL\`). \`dispatcher.py\` is the topic→handler table: it routes`,
+          `each message to its handler (\`entities/<name>/handler.py\`) with`,
+          `**ack / retry / dead-letter**, using the SAME serializers + ORM models the HTTP`,
+          `API uses. (The Django web scaffolding is retained for the ORM.)`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 export interface DjangoPluginOptions {
   /** Override the bundled templates directory (tests only). */
   templatesDir?: string;
@@ -89,23 +345,48 @@ export function createDjangoPlugin(options: DjangoPluginOptions = {}): BackendPl
       // Provider tokens first, then project tokens: a provider token value may
       // embed project tokens (e.g. compose fragments), which must resolve after.
       const tokens = { ...database.tokens(), ...deriveTokens(model.getPhaseASettings()), ...versionTokens(model.getVersions()) };
+      // Day 34: worker types add a root worker entrypoint + a scheduler/dispatcher
+      // table; the Django web scaffolding is retained (the ORM needs it). A LITERAL
+      // BYPASS otherwise — the entity view layer is swapped in generateEntity.
+      const projectType = model.getPhaseASettings().projectType;
+      const workerKind: 'cron' | 'queue' | null =
+        projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
+        let raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
+        if (workerKind) {
+          if (relRaw === 'requirements.txt' && workerKind === 'queue') raw = addPikaRequire(raw);
+          else if (relRaw === 'README.md') raw = addWorkerReadmeDj(raw, workerKind);
+        }
         const relOut = applyTokens(relRaw, tokens);
-        const raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
         const content = applyTokens(raw, tokens);
         files.push({ relPath: relOut, content, ownership: 'thraksha' });
+      }
+      // Day 34: the worker entrypoint + route/handler-table shell (root modules).
+      // The per-entity job/handler comes from generateEntity.
+      if (workerKind === 'cron') {
+        files.push({ relPath: 'worker.py', content: applyTokens(CRON_WORKER_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'scheduler.py', content: applyTokens(CRON_SCHEDULER_PY, tokens), ownership: 'thraksha' });
+      } else if (workerKind === 'queue') {
+        files.push({ relPath: 'worker.py', content: applyTokens(QUEUE_WORKER_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'dispatcher.py', content: applyTokens(QUEUE_DISPATCHER_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'broker.py', content: applyTokens(QUEUE_BROKER_PY, tokens), ownership: 'thraksha' });
       }
       return files;
     },
 
     generateEntity(entity: Entity, context: EntityGenerationContext): GeneratedFile[] {
       // Multi-user owner scoping is applied when the project is multi-user (ADR-005).
-      return generateEntityFiles(entity, {
+      const ctx = {
         multiUser: context.multiUser,
         naming: context.style.namingConvention, // Day 12: wire-key naming
-      });
+      };
+      // Day 34: worker types swap the entity HTTP view layer for a job/handler,
+      // reusing the domain files byte-identically. A LITERAL BYPASS otherwise.
+      if (context.projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
+      if (context.projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
+      return generateEntityFiles(entity, ctx);
     },
 
     describeEntityDefaults(entity: Entity): string[] {

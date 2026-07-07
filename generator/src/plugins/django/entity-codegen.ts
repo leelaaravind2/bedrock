@@ -534,6 +534,115 @@ export function generateEntityFiles(entity: Entity, ctx: EntityCodegenContext): 
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Worker archetypes (Day 34, pass 2) — cron-worker + queue-consumer. Both REUSE
+// the domain layer BYTE-IDENTICALLY (__init__/apps/models/serializers + the
+// migrations) and swap ONLY the HTTP view layer (views_base.py + the dev views.py
+// / urls.py) for a worker file:
+//   - cron:  job.py     — run(): an idempotent scan over the ORM model.
+//   - queue: handler.py — a topic→handler map using the serializer + ORM model.
+// ---------------------------------------------------------------------------
+
+/** The idempotent cron job for one entity (job.py) — an idempotent scan over the ORM model. */
+function buildCronJob(entity: Entity): string {
+  const name = entity.name;
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `Cron job for ${name}: an idempotent scan over the SAME ORM model the HTTP API`,
+    `uses (models.py). No HTTP route — the scheduler calls run() each tick.`,
+    `"""`,
+    `from .models import ${name}`,
+    ``,
+    ``,
+    `def run() -> int:`,
+    `    """Idempotent: iterate the current ${name} rows and process each. Re-running`,
+    `    produces the same effect."""`,
+    `    count = 0`,
+    `    for item in ${name}.objects.all().order_by("id"):`,
+    `        process_item(item)`,
+    `        count += 1`,
+    `    return count`,
+    ``,
+    ``,
+    `def process_item(item) -> None:`,
+    `    # Idempotent per-item work goes here (default: a no-op scan).`,
+    `    return None`,
+    ``,
+  ].join('\n');
+}
+
+/** The queue topic→handler map for one entity (handler.py) — uses the serializer + ORM model. */
+function buildQueueHandler(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const imports = ctx.multiUser
+    ? [`from django.contrib.auth import get_user_model`, ``, `from .serializers import ${name}Serializer`]
+    : [`from .serializers import ${name}Serializer`];
+  const saveLine = ctx.multiUser
+    ? [
+        `    # A system consumer has no request.user — attribute new rows to the first`,
+        `    # (seeded) user. Narrow this to your own routing as needed.`,
+        `    owner = get_user_model().objects.order_by("id").first()`,
+        `    return serializer.save(owner=owner)`,
+      ]
+    : [`    return serializer.save()`];
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `Queue handlers for ${name}: a topic→handler map using the SAME serializer + ORM`,
+    `model the HTTP API uses (serializers.py / models.py). No HTTP route.`,
+    `"""`,
+    ...imports,
+    ``,
+    ``,
+    `def _create(payload: dict):`,
+    `    """Process a ${slug}.created message: validate the payload (exactly as an`,
+    `    HTTP body) and create through the serializer."""`,
+    `    serializer = ${name}Serializer(data=payload)`,
+    `    serializer.is_valid(raise_exception=True)`,
+    ...saveLine,
+    ``,
+    ``,
+    `handlers = {`,
+    `    "${slug}.created": _create,`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/**
+ * The worker entity file set (Day 34): the domain layer BYTE-IDENTICAL to the
+ * default/api-only file set (apps/models/serializers + the migrations), MINUS the
+ * HTTP view layer (views_base.py + the dev views.py/urls.py), PLUS the worker file.
+ */
+export function generateWorkerEntityFiles(
+  entity: Entity,
+  ctx: EntityCodegenContext,
+  kind: 'cron' | 'queue',
+): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  const dir = `entities/${slug}`;
+
+  const workerLayer: GeneratedFile[] =
+    kind === 'cron'
+      ? [{ relPath: `${dir}/job.py`, content: buildCronJob(entity), ownership: 'thraksha' }]
+      : [{ relPath: `${dir}/handler.py`, content: buildQueueHandler(entity, ctx), ownership: 'thraksha' }];
+
+  return [
+    // Domain layer — BYTE-IDENTICAL to the api-only twin (same builders/ctx).
+    { relPath: `${dir}/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/apps.py`, content: buildApps(entity), ownership: 'thraksha' },
+    { relPath: `${dir}/models.py`, content: buildModels(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/serializers.py`, content: buildSerializer(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/migrations/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/migrations/0001_initial.py`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    // Swapped: the worker file replaces views_base.py + the dev views.py/urls.py.
+    ...workerLayer,
+  ];
+}
+
 /**
  * Human-readable lines describing the effective field rules and which were
  * filled in by platform defaults (ADR-004 — shown, never silent).

@@ -880,6 +880,197 @@ function buildMigration(entity: Entity, ctx: EntityCodegenContext): string {
 }
 
 // ---------------------------------------------------------------------------
+// Worker archetypes (Day 34, pass 2) — cron-worker + queue-consumer. Both REUSE
+// the domain layer BYTE-IDENTICALLY (<slug>.go / store.go / validate.go /
+// service_base.go / service.go + the migration) and swap ONLY the HTTP
+// route/controller layer (handler_base.go + the dev routes.go) for a worker file:
+//   - cron:  job.go     — RunJob: an idempotent scan over the domain service.
+//   - queue: handler.go — Handlers: a topic→handler map calling the domain service.
+// So diffing a worker entity against its api-only twin shows the domain files
+// identical and ONLY the route/handler layer differing (the domain-reuse proof).
+// Go is compiled, so the worker "table" (scheduler/dispatcher) is an explicit,
+// generated file (buildWorkerRegister) — the analog of register.go.
+// ---------------------------------------------------------------------------
+
+/** The system owner id a worker job/handler runs under (no HTTP request). */
+function workerOwnerArg(ctx: EntityCodegenContext): string {
+  // Multi-user rows are owner-scoped; a system worker uses owner 0 (the developer
+  // narrows it to a real owner). Single-user: no owner argument.
+  return ctx.multiUser ? '0' : '';
+}
+
+/** The idempotent cron job for one entity (job.go) — an idempotent scan over the domain service. */
+function buildCronJob(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const listArgs = ctx.multiUser ? '0' : '';
+  return [
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// Cron job for ${name}: an idempotent scan over the SAME domain service the`,
+    `// HTTP API uses (service.go). No HTTP route — the scheduler calls RunJob each tick.`,
+    `package ${entitySlug(entity)}`,
+    ``,
+    `import "database/sql"`,
+    ``,
+    `// RunJob runs the idempotent ${name} job to completion and returns the number`,
+    `// processed. Re-running produces the same effect (idempotent by design).`,
+    `func RunJob(db *sql.DB) (int, error) {`,
+    `\tsvc := New${name}Service(db)`,
+    `\titems, err := svc.List(${listArgs})`,
+    `\tif err != nil {`,
+    `\t\treturn 0, err`,
+    `\t}`,
+    `\tfor _, item := range items {`,
+    `\t\tif err := processItem(item); err != nil {`,
+    `\t\t\treturn 0, err`,
+    `\t\t}`,
+    `\t}`,
+    `\treturn len(items), nil`,
+    `}`,
+    ``,
+    `// processItem is the idempotent per-item work (default: a no-op scan).`,
+    `func processItem(item *${name}) error {`,
+    `\t_ = item`,
+    `\treturn nil`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/** The queue topic→handler map for one entity (handler.go) — each handler calls the domain service. */
+function buildQueueHandler(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const owner = workerOwnerArg(ctx);
+  return [
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// Queue handlers for ${name}: a topic→handler map calling the SAME domain`,
+    `// service the HTTP API uses (service.go). No HTTP route — the dispatcher routes`,
+    `// each message topic to its handler with ack/retry/dead-letter.`,
+    `package ${slug}`,
+    ``,
+    `import (`,
+    `\t"database/sql"`,
+    `\t"encoding/json"`,
+    `)`,
+    ``,
+    `// Handlers returns this entity's topic→handler map. Each handler decodes a`,
+    `// message payload (validated exactly as an HTTP body would be) and processes it`,
+    `// through the domain service. Topics mirror the entity.`,
+    `func Handlers(db *sql.DB) map[string]func([]byte) error {`,
+    `\tsvc := New${name}Service(db)`,
+    `\treturn map[string]func([]byte) error{`,
+    `\t\t"${slug}.created": func(payload []byte) error {`,
+    `\t\t\tvar in ${name}Input`,
+    `\t\t\tif err := json.Unmarshal(payload, &in); err != nil {`,
+    `\t\t\t\treturn err`,
+    `\t\t\t}`,
+    `\t\t\tif err := in.Validate(); err != nil {`,
+    `\t\t\t\treturn err`,
+    `\t\t\t}`,
+    `\t\t\t_, err := svc.Create(in.toEntity(${owner}))`,
+    `\t\t\treturn err`,
+    `\t\t},`,
+    `\t}`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/**
+ * The worker entity file set (Day 34): the domain layer BYTE-IDENTICAL to the
+ * default/api-only file set (buildModel/buildStore/buildValidate/buildServiceBase/
+ * buildMigration + the developer service.go), MINUS the HTTP route/controller layer
+ * (handler_base.go + the dev routes.go), PLUS the worker file (job.go / handler.go).
+ */
+export function generateWorkerEntityFiles(
+  entity: Entity,
+  ctx: EntityCodegenContext,
+  kind: 'cron' | 'queue',
+): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  const dir = `internal/entities/${slug}`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+
+  const workerLayer: GeneratedFile[] =
+    kind === 'cron'
+      ? [{ relPath: `${dir}/job.go`, content: buildCronJob(entity, ctx), ownership: 'thraksha' }]
+      : [{ relPath: `${dir}/handler.go`, content: buildQueueHandler(entity, ctx), ownership: 'thraksha' }];
+
+  return [
+    // Domain layer — BYTE-IDENTICAL to the api-only twin (same builders/ctx).
+    { relPath: `${dir}/${slug}.go`, content: buildModel(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/store.go`, content: buildStore(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/validate.go`, content: buildValidate(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/service_base.go`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `migrations/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    // The developer service seam — reused unchanged (the job/handler wraps it).
+    { relPath: `${dir}/service.go`, content: buildServiceDev(entity), ownership: 'developer' },
+    // Swapped: the worker file replaces handler_base.go + the dev routes.go.
+    ...workerLayer,
+  ];
+}
+
+/**
+ * The generated internal/worker/register.go: the worker "table" (the analog of
+ * register.go). cron: RunAll runs every entity's RunJob each tick; queue: Handlers
+ * aggregates every entity's topic→handler map. Sorted, deterministic.
+ */
+export function buildWorkerRegister(entities: Entity[], kind: 'cron' | 'queue'): string {
+  const sorted = [...entities].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const slugs = sorted.map((e) => e.name.toLowerCase());
+  const imports = slugs.map((s) => `\t"app/internal/entities/${s}"`);
+  if (kind === 'cron') {
+    const calls = slugs.flatMap((s) => [
+      `\tif n, err := ${s}.RunJob(db); err != nil {`,
+      `\t\tlog.Printf("cron job ${s} failed: %v", err)`,
+      `\t} else {`,
+      `\t\tlog.Printf("cron job ${s} processed %d", n)`,
+      `\t}`,
+    ]);
+    return [
+      `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+      `// The job table: runs every entity's idempotent job each tick (sorted, deterministic).`,
+      `package worker`,
+      ``,
+      `import (`,
+      `\t"database/sql"`,
+      `\t"log"`,
+      ...(imports.length > 0 ? [``, ...imports] : []),
+      `)`,
+      ``,
+      `// RunAll runs every entity job to completion (idempotent).`,
+      `func RunAll(db *sql.DB) {`,
+      ...(calls.length > 0 ? calls : [`\t_ = db`]),
+      `}`,
+      ``,
+    ].join('\n');
+  }
+  const maps = slugs.map((s) => `\t\t${s}.Handlers(db),`);
+  return [
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// The topic→handler table: aggregates every entity's handlers (sorted, deterministic).`,
+    `package worker`,
+    ``,
+    `import (`,
+    `\t"database/sql"`,
+    ...(imports.length > 0 ? [``, ...imports] : []),
+    `)`,
+    ``,
+    `// Handlers builds the full topic→handler table across all entities.`,
+    `func Handlers(db *sql.DB) map[string]func([]byte) error {`,
+    `\ttable := map[string]func([]byte) error{}`,
+    ...(maps.length > 0
+      ? [`\tfor _, m := range []map[string]func([]byte) error{`, ...maps, `\t} {`, `\t\tfor topic, h := range m {`, `\t\t\ttable[topic] = h`, `\t\t}`, `\t}`]
+      : [`\t_ = db`]),
+    `\treturn table`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Public API.
 // ---------------------------------------------------------------------------
 

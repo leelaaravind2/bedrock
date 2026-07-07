@@ -834,6 +834,141 @@ function buildMigration(entity: Entity, ctx: EntityCodegenContext): string {
 // Public API.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Worker archetypes (Day 34, pass 2) — cron-worker + queue-consumer. Both REUSE
+// the domain layer BYTE-IDENTICALLY (<Name>Base/Repository/Dto/ServiceBase + the
+// migration + the developer <Name>.java/<Name>Service.java) and swap ONLY the HTTP
+// controller layer (<Name>ControllerBase + the dev <Name>Controller) for a worker:
+//   - cron:  <Name>Job.java      — a @Scheduled bean scanning the repository (idempotent).
+//   - queue: <Name>Listener.java — a @RabbitListener consuming into the Dto + repository.
+// Both are component-scanned (the worker analog of an auto-registered @RestController),
+// so no explicit table is generated. They reuse the domain REPOSITORY + DTO directly
+// (not the request-scoped service, which needs a SecurityContext a worker lacks) —
+// JpaRepository.findAll()/save() are the same persistence the HTTP service uses.
+// ---------------------------------------------------------------------------
+
+/** The idempotent cron job for one entity (<Name>Job.java) — a @Scheduled scan over the repository. */
+function buildCronJob(entity: Entity, ctx: EntityCodegenContext): string {
+  const pkg = `${ctx.packageName}.${entitySegment(entity)}`;
+  const name = entity.name;
+  return [
+    `package ${pkg};`,
+    ``,
+    `import org.springframework.beans.factory.annotation.Autowired;`,
+    `import org.springframework.scheduling.annotation.Scheduled;`,
+    `import org.springframework.stereotype.Component;`,
+    ``,
+    `/**`,
+    ` * THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ` *`,
+    ` * Cron job for ${name}: an idempotent scan over the SAME repository the HTTP`,
+    ` * API's service uses (${name}Repository). No HTTP endpoint — @Scheduled fires`,
+    ` * run() on an interval (component-scanned, the worker analog of an`,
+    ` * auto-registered @RestController). Re-running is idempotent by design.`,
+    ` */`,
+    `@Component`,
+    `public class ${name}Job {`,
+    ``,
+    `    @Autowired`,
+    `    protected ${name}Repository repository;`,
+    ``,
+    `    @Scheduled(fixedDelayString = "\${cron.interval.ms:60000}")`,
+    `    public int run() {`,
+    `        int count = 0;`,
+    `        for (${name} item : repository.findAll()) {`,
+    `            processItem(item);`,
+    `            count++;`,
+    `        }`,
+    `        return count;`,
+    `    }`,
+    ``,
+    `    protected void processItem(${name} item) {`,
+    `        // Idempotent per-item work goes here (default: a no-op scan).`,
+    `    }`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/** The queue listener for one entity (<Name>Listener.java) — @RabbitListener into the Dto + repository. */
+function buildQueueListener(entity: Entity, ctx: EntityCodegenContext): string {
+  const pkg = `${ctx.packageName}.${entitySegment(entity)}`;
+  const name = entity.name;
+  const slug = entitySegment(entity);
+  const ownerLine = ctx.multiUser
+    ? [`        entity.setOwnerId(0L); // system owner (a consumer has no request user); narrow as needed`]
+    : [];
+  return [
+    `package ${pkg};`,
+    ``,
+    `import org.springframework.amqp.rabbit.annotation.RabbitListener;`,
+    `import org.springframework.beans.factory.annotation.Autowired;`,
+    `import org.springframework.stereotype.Component;`,
+    ``,
+    `/**`,
+    ` * THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ` *`,
+    ` * Queue listener for ${name}: consumes "${slug}.created" and creates through the`,
+    ` * SAME ${name}Dto + ${name}Repository the HTTP API's service uses. No HTTP`,
+    ` * endpoint. Spring AMQP's listener container provides ack (on normal return),`,
+    ` * redelivery/retry (on exception), and dead-letter (via a broker DLX) — the`,
+    ` * declarative equivalent of the ack/retry/dead-letter loop the other stacks`,
+    ` * hand-roll. Component-scanned, like an auto-registered @RestController.`,
+    ` */`,
+    `@Component`,
+    `public class ${name}Listener {`,
+    ``,
+    `    @Autowired`,
+    `    protected ${name}Repository repository;`,
+    ``,
+    `    @RabbitListener(queues = "${slug}.created")`,
+    `    public void onCreated(${name}Dto dto) {`,
+    `        ${name} entity = new ${name}();`,
+    `        dto.applyTo(entity);`,
+    ...ownerLine,
+    `        repository.save(entity);`,
+    `    }`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/**
+ * The worker entity file set (Day 34): the domain layer BYTE-IDENTICAL to the
+ * default/api-only file set (<Name>Base/Repository/Dto/ServiceBase + migration +
+ * the developer <Name>.java/<Name>Service.java), MINUS the HTTP controller layer
+ * (<Name>ControllerBase + the dev <Name>Controller), PLUS the worker bean.
+ */
+export function generateWorkerEntityFiles(
+  entity: Entity,
+  ctx: EntityCodegenContext,
+  kind: 'cron' | 'queue',
+): GeneratedFile[] {
+  const javaDir = `backend/src/main/java/${ctx.packagePath}/${entitySegment(entity)}`;
+  const migrationDir = `backend/src/main/resources/db/migration`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+
+  const workerLayer: GeneratedFile[] =
+    kind === 'cron'
+      ? [{ relPath: `${javaDir}/${entity.name}Job.java`, content: buildCronJob(entity, ctx), ownership: 'thraksha' }]
+      : [{ relPath: `${javaDir}/${entity.name}Listener.java`, content: buildQueueListener(entity, ctx), ownership: 'thraksha' }];
+
+  return [
+    // Domain layer — BYTE-IDENTICAL to the api-only twin (same builders/ctx).
+    { relPath: `${javaDir}/${entity.name}Base.java`, content: buildEntityBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${javaDir}/${entity.name}Repository.java`, content: buildRepository(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${javaDir}/${entity.name}Dto.java`, content: buildDto(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${javaDir}/${entity.name}ServiceBase.java`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${migrationDir}/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    // The developer entity + service seam — reused unchanged.
+    { relPath: `${javaDir}/${entity.name}.java`, content: buildEntityClass(entity, ctx), ownership: 'developer' },
+    { relPath: `${javaDir}/${entity.name}Service.java`, content: buildServiceClass(entity, ctx), ownership: 'developer' },
+    // Swapped: the worker bean replaces <Name>ControllerBase + the dev <Name>Controller.
+    ...workerLayer,
+  ];
+}
+
 /**
  * Generate all files for one entity, each tagged with its ownership (ADR-002).
  * Pure and deterministic — same Entity + context always yields the same files.

@@ -21,6 +21,7 @@ import { postgresProvider } from '../database/postgres.js';
 import {
   generateEntityFiles,
   generateSimpleEntityFiles,
+  generateWorkerEntityFiles,
   describeEntityDefaults as describePythonEntityDefaults,
   type EntityCodegenContext,
 } from './entity-codegen.js';
@@ -316,6 +317,249 @@ function wireAiMount(raw: string): string {
   ].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// Worker archetypes (Day 34, pass 2). cron-worker + queue-consumer swap the ASGI
+// entrypoint (app/main.py — the router auto-mount / route table) for a scheduler
+// (stdlib time loop — NO dep) or a broker consume loop. A LITERAL BYPASS for
+// 'Web App'/'API-only'. Generation-only (no Python toolchain booted here). pika is
+// a GENERATED-PROJECT dep gated on the queue type (Thraksha core stays deps {}).
+// ---------------------------------------------------------------------------
+
+/** cron-worker entrypoint (app/worker.py): migrate → seed → run once → time loop (stdlib). */
+const CRON_WORKER_PY = [
+  `"""Entry point (cron-worker): run migrations, seed, then the scheduler loop.`,
+  ``,
+  `Uses the standard library (time) — NO scheduler dependency. Each entity job is`,
+  `idempotent (safe to re-run). Run with: python -m app.worker`,
+  `"""`,
+  `import time`,
+  ``,
+  `from . import migrate, seed`,
+  `from .scheduler import run_all`,
+  ``,
+  `INTERVAL_SECONDS = 60`,
+  ``,
+  ``,
+  `def main() -> None:`,
+  `    migrate.run()`,
+  `    seed.run()`,
+  `    run_all()  # run once at startup`,
+  `    while True:`,
+  `        time.sleep(INTERVAL_SECONDS)`,
+  `        run_all()`,
+  ``,
+  ``,
+  `if __name__ == "__main__":`,
+  `    main()`,
+  ``,
+].join('\n');
+
+/** cron-worker job table (app/scheduler.py): auto-discovers app/entities/<name>/job.py. */
+const CRON_SCHEDULER_PY = [
+  `"""The job table (auto-discovers app/entities/<name>/job.py) — the cron analog of`,
+  `main.py's router auto-mount. Runs each entity job in sorted (deterministic) order."""`,
+  `import importlib`,
+  `import os`,
+  ``,
+  `from . import entities as entities_pkg`,
+  ``,
+  ``,
+  `def _load_jobs():`,
+  `    jobs = []`,
+  `    entities_dir = os.path.dirname(entities_pkg.__file__)`,
+  `    if os.path.isdir(entities_dir):`,
+  `        for name in sorted(os.listdir(entities_dir)):`,
+  `            job_file = os.path.join(entities_dir, name, "job.py")`,
+  `            if os.path.isfile(job_file):`,
+  `                module = importlib.import_module(f"app.entities.{name}.job")`,
+  `                jobs.append((name, module))`,
+  `    return jobs`,
+  ``,
+  ``,
+  `def run_all() -> int:`,
+  `    processed = 0`,
+  `    for name, module in _load_jobs():`,
+  `        n = module.run()`,
+  `        processed += n or 0`,
+  `        print(f"cron job {name} processed {n}")`,
+  `    return processed`,
+  ``,
+].join('\n');
+
+/** queue-consumer entrypoint (app/worker.py): migrate → seed → consume. */
+const QUEUE_WORKER_PY = [
+  `"""Entry point (queue-consumer): run migrations, seed, then consume.`,
+  ``,
+  `Run with: python -m app.worker`,
+  `"""`,
+  `from . import migrate, seed`,
+  `from .broker import consume`,
+  ``,
+  ``,
+  `def main() -> None:`,
+  `    migrate.run()`,
+  `    seed.run()`,
+  `    consume()`,
+  ``,
+  ``,
+  `if __name__ == "__main__":`,
+  `    main()`,
+  ``,
+].join('\n');
+
+/** queue-consumer dispatcher (app/dispatcher.py): topic→handler table + ack/retry/dead-letter. */
+const QUEUE_DISPATCHER_PY = [
+  `"""The topic→handler table (auto-discovers app/entities/<name>/handler.py) — the`,
+  `queue analog of main.py's router auto-mount — plus dispatch() with ack / retry /`,
+  `dead-letter (broker-agnostic, so it is unit-testable with a stub broker)."""`,
+  `import importlib`,
+  `import os`,
+  ``,
+  `from . import entities as entities_pkg`,
+  ``,
+  `MAX_ATTEMPTS = 3`,
+  ``,
+  ``,
+  `def load_handlers() -> dict:`,
+  `    table = {}`,
+  `    entities_dir = os.path.dirname(entities_pkg.__file__)`,
+  `    if os.path.isdir(entities_dir):`,
+  `        for name in sorted(os.listdir(entities_dir)):`,
+  `            handler_file = os.path.join(entities_dir, name, "handler.py")`,
+  `            if os.path.isfile(handler_file):`,
+  `                module = importlib.import_module(f"app.entities.{name}.handler")`,
+  `                for topic in sorted(module.handlers):`,
+  `                    table[topic] = module.handlers[topic]`,
+  `    return table`,
+  ``,
+  ``,
+  `HANDLERS = load_handlers()`,
+  ``,
+  ``,
+  `def topics() -> list:`,
+  `    return sorted(HANDLERS)`,
+  ``,
+  ``,
+  `def dispatch(topic: str, payload: dict, broker, attempt: int = 0) -> str:`,
+  `    """Run one message through its handler: success -> ack; a transient failure ->`,
+  `    retry up to MAX_ATTEMPTS; a poison message (exhausted, or no handler) ->`,
+  `    dead-letter. The broker supplies ack/retry/dead_letter."""`,
+  `    handler = HANDLERS.get(topic)`,
+  `    if handler is None:`,
+  `        broker.dead_letter(topic, payload, "no handler for topic")`,
+  `        return "dead-letter"`,
+  `    attempt += 1`,
+  `    try:`,
+  `        handler(payload)`,
+  `        broker.ack(topic, payload)`,
+  `        return "ack"`,
+  `    except Exception as exc:  # noqa: BLE001 (transient vs poison decided by attempt)`,
+  `        if attempt < MAX_ATTEMPTS:`,
+  `            broker.retry(topic, payload, attempt)`,
+  `            return "retry"`,
+  `        broker.dead_letter(topic, payload, str(exc))`,
+  `        return "dead-letter"`,
+  ``,
+].join('\n');
+
+/** queue-consumer broker (app/broker.py): pika connection, WIRED but INERT until QUEUE_URL set. */
+const QUEUE_BROKER_PY = [
+  `"""The broker connection (AMQP / RabbitMQ via pika). WIRED but INERT until`,
+  `QUEUE_URL is set. The dispatch loop (dispatcher.py) is broker-agnostic. pika is a`,
+  `GENERATED-PROJECT dependency (requirements.txt), never Thraksha's."""`,
+  `import json`,
+  `import os`,
+  ``,
+  `import pika`,
+  ``,
+  `from .dispatcher import dispatch, topics`,
+  ``,
+  ``,
+  `class _PikaBroker:`,
+  `    def __init__(self, channel):`,
+  `        self.channel = channel`,
+  ``,
+  `    def ack(self, topic, payload) -> None:`,
+  `        pass  # the delivery is acked in _on_message`,
+  ``,
+  `    def retry(self, topic, payload, attempt) -> None:`,
+  `        self.channel.basic_publish(`,
+  `            exchange="", routing_key=topic, body=json.dumps(payload),`,
+  `            properties=pika.BasicProperties(headers={"attempt": str(attempt)}),`,
+  `        )`,
+  ``,
+  `    def dead_letter(self, topic, payload, reason) -> None:`,
+  `        self.channel.queue_declare(queue=topic + ".dead", durable=True)`,
+  `        self.channel.basic_publish(`,
+  `            exchange="", routing_key=topic + ".dead",`,
+  `            body=json.dumps({"payload": payload, "reason": reason}),`,
+  `        )`,
+  ``,
+  ``,
+  `def _on_message(broker, topic, method, props, body) -> None:`,
+  `    payload = json.loads(body)`,
+  `    attempt = 0`,
+  `    if props.headers and "attempt" in props.headers:`,
+  `        attempt = int(props.headers["attempt"])`,
+  `    dispatch(topic, payload, broker, attempt)`,
+  `    broker.channel.basic_ack(method.delivery_tag)`,
+  ``,
+  ``,
+  `def consume() -> None:`,
+  `    url = os.environ.get("QUEUE_URL", "")`,
+  `    if not url:`,
+  `        raise RuntimeError("Queue is not configured — set QUEUE_URL in the environment.")`,
+  `    connection = pika.BlockingConnection(pika.URLParameters(url))`,
+  `    channel = connection.channel()`,
+  `    broker = _PikaBroker(channel)`,
+  `    for topic in topics():`,
+  `        channel.queue_declare(queue=topic, durable=True)`,
+  `        channel.basic_consume(`,
+  `            queue=topic,`,
+  `            on_message_callback=lambda ch, method, props, body, _t=topic: _on_message(`,
+  `                broker, _t, method, props, body`,
+  `            ),`,
+  `        )`,
+  `    print(f"queue consumer started ({len(topics())} topics)")`,
+  `    channel.start_consuming()`,
+  ``,
+].join('\n');
+
+/** Add pika to requirements.txt (queue only) — a gated GENERATED-PROJECT dep. */
+function addPikaRequire(raw: string): string {
+  return raw.trimEnd() + '\n' + 'pika==1.3.2\n';
+}
+
+/** Append a truthful worker section to the FastAPI README. */
+function addWorkerReadmePy(raw: string, kind: 'cron' | 'queue'): string {
+  const lines =
+    kind === 'cron'
+      ? [
+          ``,
+          `## Cron worker (project type: Cron Worker)`,
+          ``,
+          `This is a **scheduler**, not an HTTP server: \`app/worker.py\` runs migrations +`,
+          `seed, then ticks every 60s via the standard library (\`time\`) — **no scheduler`,
+          `dependency**. \`app/scheduler.py\` auto-discovers every`,
+          `\`app/entities/<name>/job.py\` and runs its idempotent \`run()\`, reusing the SAME`,
+          `domain services the HTTP API would. Run with \`python -m app.worker\`.`,
+          ``,
+        ]
+      : [
+          ``,
+          `## Queue consumer (project type: Queue Consumer)`,
+          ``,
+          `This is a **message consumer**, not an HTTP server: \`app/worker.py\` runs`,
+          `migrations + seed, then connects to the broker (\`app/broker.py\`, AMQP/RabbitMQ`,
+          `via \`pika\` — set \`QUEUE_URL\`) and consumes. \`app/dispatcher.py\` is the`,
+          `topic→handler table: it routes each message to its handler`,
+          `(\`app/entities/<name>/handler.py\`) with **ack / retry / dead-letter**, reusing`,
+          `the SAME domain services the HTTP API would. Run with \`python -m app.worker\`.`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 /** Construct the Python (FastAPI) backend plugin. */
 export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPlugin {
   const templatesDir = options.templatesDir ?? DEFAULT_TEMPLATES_DIR;
@@ -334,10 +578,22 @@ export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPl
       // Day 18: the AI hook adds a detachable /api/ai/* surface; a LITERAL BYPASS
       // otherwise. Independent of email — each gated separately.
       const ai = model.getIntegrations().ai === 'hook';
+      // Day 34: worker types swap the ASGI entrypoint (app/main.py — the route
+      // table) for a scheduler / broker consume loop. A LITERAL BYPASS otherwise.
+      const projectType = model.getPhaseASettings().projectType;
+      const workerKind: 'cron' | 'queue' | null =
+        projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
+        // Worker types swap the HTTP entrypoint: skip app/main.py (the router
+        // auto-mount / route table); every other template is domain shell, reused.
+        if (workerKind && relRaw === 'app/main.py') continue;
         let raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
+        if (workerKind) {
+          if (relRaw === 'requirements.txt' && workerKind === 'queue') raw = addPikaRequire(raw);
+          else if (relRaw === 'README.md') raw = addWorkerReadmePy(raw, workerKind);
+        }
         if (email) {
           if (relRaw === 'app/config.py') raw = addSmtpConfig(raw);
           else if (relRaw === '.env.example') raw = addSmtpEnv(raw);
@@ -362,6 +618,16 @@ export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPl
         // The AI client the app calls (stdlib urllib) — mounted on /api/ai/*, inert until keyed.
         files.push({ relPath: 'app/ai.py', content: AI_SERVICE_PY, ownership: 'thraksha' });
       }
+      // Day 34: the worker entrypoint + route/handler-table shell (in place of the
+      // skipped app/main.py). The per-entity job/handler comes from generateEntity.
+      if (workerKind === 'cron') {
+        files.push({ relPath: 'app/worker.py', content: applyTokens(CRON_WORKER_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'app/scheduler.py', content: applyTokens(CRON_SCHEDULER_PY, tokens), ownership: 'thraksha' });
+      } else if (workerKind === 'queue') {
+        files.push({ relPath: 'app/worker.py', content: applyTokens(QUEUE_WORKER_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'app/dispatcher.py', content: applyTokens(QUEUE_DISPATCHER_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'app/broker.py', content: applyTokens(QUEUE_BROKER_PY, tokens), ownership: 'thraksha' });
+      }
       return files;
     },
 
@@ -372,6 +638,10 @@ export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPl
         sql: database.sql,
         naming: context.style.namingConvention, // Day 12: wire-key naming
       };
+      // Day 34: worker types swap the entity HTTP router layer for a job/handler,
+      // reusing the domain files byte-identically. A LITERAL BYPASS otherwise.
+      if (context.projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
+      if (context.projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
       // Day 13: architectureDepth branches the FILE SET. 'default' is a literal
       // bypass (generateEntityFiles untouched → the 20 hashes are frozen).
       return context.style.architectureDepth === 'simple'
