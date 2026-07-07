@@ -112,6 +112,14 @@ const AI_HOOK: Record<string, string> = {
   Express: 'a17c6ad4dfc3a01bd5f7cfbe008bbac622fae0d67443f5f0293f6b26507c2cec',
 };
 
+// Worker archetypes (Eco-Day 34) — Express cron-worker + queue-consumer (DemoApp, PG).
+// ADDITIVE: each is a NEW twice-identical baseline for a new projectType; neither
+// replaces a frozen hash (no fixture uses a worker type, so the default is byte-identical).
+const WORKER: Record<string, string> = {
+  'Cron Worker': '7f6c09cfad31eadefe12adb31e0f58e6b695a4cb7baaa8bc6bff1db73e15ff59',
+  'Queue Consumer': '799ef9873a6ccc28b3d7fd2b537f0c4fb8bc7f5d4304c3db49129c91bd44d6c5',
+};
+
 // The canonical MAXIMAL-composition baseline (Eco-Day 1) — the reproducible
 // replacement for the retired, record-only, un-reproducible `33f3ec4b…`. Its input
 // is the committed fixture in maxcell-fixture.ts (Express + snake_case + multi-edge FK).
@@ -930,6 +938,74 @@ async function main(): Promise<void> {
     };
     const ui = hashFiles(await filesOf(assembleBlueprint(choices)));
     record(ui === a, 'UI==CLI for Figma tokens: assembleBlueprint == programmatic path, byte-identical', ui.slice(0, 16));
+  }
+
+  // ══ PART 1q — worker archetypes: cron-worker + queue-consumer (Eco-Day 34) ═══
+  // Two new projectType values as ENTRYPOINT/LIFECYCLE projections that REUSE the
+  // domain layer and swap only the HTTP entrypoint + route/controller layer. Express
+  // is boot-verified (see the day34 boot driver); the other 4 stacks are staged
+  // (generation-only, pass 2 — no Go/Java toolchain, heavy Python; honest per §4).
+  process.stdout.write('\n=== PART 1q: worker archetypes — cron-worker + queue-consumer (Eco-Day 34 — Express) ===\n');
+  {
+    // The HTTP entrypoint + entity route/controller layer the workers swap out.
+    const HTTP_SWAPPED = new Set([
+      'src/server.js',
+      'src/app.js',
+      'src/entities/ticket/ticket.controller.base.js',
+      'src/entities/ticket/ticket.routes.base.js',
+      'src/entities/ticket/ticket.routes.js',
+    ]);
+    // Files the projection LEGITIMATELY rewrites (not domain): the manifest lists
+    // files, package.json repoints main/start (+amqplib for queue), README swaps run docs.
+    const REWRITTEN = new Set(['GENERATION-MANIFEST.txt', 'package.json', 'README.md']);
+    const workerAdded: Record<string, string[]> = {
+      'Cron Worker': ['src/worker.js', 'src/scheduler.js', 'src/entities/ticket/ticket.job.js'],
+      'Queue Consumer': ['src/worker.js', 'src/dispatcher.js', 'src/broker.js', 'src/entities/ticket/ticket.handler.js'],
+    };
+    const apiTwin = toMap(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'API-only' })));
+
+    for (const pt of ['Cron Worker', 'Queue Consumer'] as const) {
+      const kind: 'cron' | 'queue' = pt === 'Cron Worker' ? 'cron' : 'queue';
+      // (a) twice-identical == recorded additive baseline.
+      const a = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: pt })));
+      const b = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: pt })));
+      bake(`worker|Express|${pt}`, a);
+      record(a === b && a === WORKER[pt], `${pt} Express twice-identical == recorded additive baseline`, a.slice(0, 16));
+
+      // (b) DOMAIN-REUSE proof: every file present in BOTH the worker and the api-only
+      // twin is byte-identical EXCEPT the legitimately-rewritten manifest/package/README;
+      // the removed set is EXACTLY the HTTP entrypoint + route layer; the added set is
+      // EXACTLY the worker entrypoint + job/handler. So the domain layer is reused unchanged.
+      const wk = toMap(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: pt })));
+      let domainIdentical = true;
+      for (const [p, c] of apiTwin) if (wk.has(p) && !REWRITTEN.has(p) && wk.get(p) !== c) domainIdentical = false;
+      const removed = [...apiTwin.keys()].filter((p) => !wk.has(p)).sort();
+      const added = [...wk.keys()].filter((p) => !apiTwin.has(p)).sort();
+      const removedOk = removed.length === HTTP_SWAPPED.size && removed.every((p) => HTTP_SWAPPED.has(p));
+      const addedOk = added.length === workerAdded[pt].length && added.every((p) => workerAdded[pt].includes(p));
+      // The kind-specific worker artifacts exist (scheduler+job for cron; dispatcher+broker+handler for queue).
+      const shapeOk = kind === 'cron'
+        ? wk.has('src/scheduler.js') && [...wk.keys()].some((p) => p.endsWith('.job.js'))
+        : wk.has('src/dispatcher.js') && wk.has('src/broker.js') && [...wk.keys()].some((p) => p.endsWith('.handler.js'));
+      record(domainIdentical && removedOk && addedOk && shapeOk,
+        `${pt} DOMAIN-REUSE: domain byte-identical to api-only twin; only entrypoint+route/handler swapped`,
+        `(-${removed.length} HTTP, +${added.length} worker)`);
+    }
+
+    // (c) DEFAULT = LITERAL BYPASS (re-derived): the worker projectType adds no file
+    // and moves no hash for Web-App/API-only — proven by the whole backstop above being
+    // byte-identical (no worker fixture in PART 1a/1b). Here we assert the enum-shape:
+    // a worker forces frontend=None (no frontend) via the generalized Day-15 constraint.
+    const cronManifest = (await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'Cron Worker' }))).find((f) => f.relPath === 'GENERATION-MANIFEST.txt')?.content ?? '';
+    record(/projectType: Cron Worker/.test(cronManifest) && /frontend: None/.test(cronManifest) && /Cron Worker projects have no frontend/.test(cronManifest),
+      'worker type↔frontend constraint: Cron Worker → frontend None (generalized Day-15 rule, shown ADR-004)');
+
+    // (d) queue-consumer adds the amqplib broker driver as a GENERATED-PROJECT dep,
+    // gated on the type; cron adds NO dep (setInterval builtin). Thraksha core deps {}.
+    const queuePkg = (await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'Queue Consumer' }))).find((f) => f.relPath === 'package.json')?.content ?? '';
+    const cronPkg = (await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'Cron Worker' }))).find((f) => f.relPath === 'package.json')?.content ?? '';
+    record(/"amqplib":/.test(queuePkg) && /"main": "src\/worker.js"/.test(queuePkg) && !/"amqplib":/.test(cronPkg) && /"main": "src\/worker.js"/.test(cronPkg),
+      'gated deps: queue adds amqplib (generated-project dep); cron adds none (setInterval builtin); both repoint main→worker.js');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

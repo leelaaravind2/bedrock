@@ -139,6 +139,7 @@ export async function buildFileSet(model: ProjectModel, plugin: BackendPlugin): 
         index,
         multiUser: inputs.multiUser === true,
         projectName: inputs.projectName,
+        projectType: inputs.projectType,
         style,
       }),
     );

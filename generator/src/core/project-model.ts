@@ -43,13 +43,17 @@ export interface PhaseASettings {
   projectName: string;
   /**
    * Q2 Mandatory — project category / TYPE. 'Web App' is the default (a
-   * full project); 'API-only' is a backend with no frontend (Day 15). The type
-   * is the higher-level concept that constrains the lower answers — 'API-only'
-   * implies no frontend (enforced in createProjectModel). Keep 'Web App' the
-   * EXACT string it has always been: it is the literal bypass that freezes the
-   * 20-hash matrix (its manifest line stays byte-identical).
+   * full project); 'API-only' is a backend with no frontend (Day 15). Day 34
+   * adds two worker archetypes — 'Cron Worker' (a scheduler + an idempotent
+   * handler, no HTTP routes) and 'Queue Consumer' (a broker + a consume loop +
+   * a topic→handler table). The type is the higher-level concept that constrains
+   * the lower answers — every non-'Web App' type implies no frontend (enforced
+   * in createProjectModel). Keep 'Web App' the EXACT string it has always been:
+   * it is the literal bypass that freezes the 20-hash matrix (its manifest line
+   * stays byte-identical). The worker types are ADDITIVE — no fixture uses them,
+   * so the frozen backstop reproduces byte-for-byte (Day-34 default-bypass).
    */
-  projectType: 'Web App' | 'API-only';
+  projectType: 'Web App' | 'API-only' | 'Cron Worker' | 'Queue Consumer';
   /**
    * Q3-Q5 Mandatory — the chosen technologies, recorded as the developer's
    * intent (Law 1). The kernel stores these names but NEVER acts on them with
@@ -407,18 +411,24 @@ export function createProjectModel(settings: PhaseASettingsInput): ProjectModel 
     }
   }
 
-  // The type↔frontend constraint (Day 15): an API-only project has no frontend.
-  // This is a GENERIC project-shape rule (not per-technology), so it is Law-25
-  // legal in the kernel, exactly like the multiUser/auth normalisation above. It
-  // is recorded in defaultsApplied so it is shown, never silent (ADR-004). Web-App
-  // leaves frontend as chosen (React or None), so the 20 Web-App hashes are
-  // untouched. Only API-only projects (a new output, no frozen hash) are affected.
-  if (phaseA.projectType === 'API-only' && phaseA.frontend !== 'None') {
+  // The type↔frontend constraint (Day 15, generalized Day 34): a non-'Web App'
+  // project has no frontend. This is a GENERIC project-shape rule (not
+  // per-technology), so it is Law-25 legal in the kernel, exactly like the
+  // multiUser/auth normalisation above. It is recorded in defaultsApplied so it is
+  // shown, never silent (ADR-004). Web-App leaves frontend as chosen (React or
+  // None), so the 20 Web-App hashes are untouched. API-only, Cron Worker, and
+  // Queue Consumer (each a new output, no frozen hash) are frontendless. The
+  // API-only reason string is preserved BYTE-IDENTICAL so its Day-15 baseline does
+  // not move; the worker types name themselves in their own (new) reason.
+  if (phaseA.projectType !== 'Web App' && phaseA.frontend !== 'None') {
     phaseA.frontend = 'None';
     defaultsApplied.push({
       setting: 'frontend',
       value: 'None',
-      reason: 'API-only projects have no frontend (project type constrains frontend).',
+      reason:
+        phaseA.projectType === 'API-only'
+          ? 'API-only projects have no frontend (project type constrains frontend).'
+          : `${phaseA.projectType} projects have no frontend (project type constrains frontend).`,
     });
   }
 

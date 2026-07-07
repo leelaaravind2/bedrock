@@ -43,6 +43,14 @@ export interface EntityGenerationContext {
   /** The project name, as the developer entered it. */
   projectName: string;
   /**
+   * The project TYPE (Day 34). The plugin decides the entity's shape per type:
+   * 'Web App'/'API-only' emit the HTTP CRUD slice (default); 'Cron Worker' /
+   * 'Queue Consumer' reuse the domain files and swap the route/controller layer
+   * for a worker job/handler. Defaulted so an omitting caller reproduces the HTTP
+   * output byte-identically (a literal bypass).
+   */
+  projectType: string;
+  /**
    * The developer's chosen coding style (default = a no-op reproducing current
    * output). A plugin applies whatever parts of it are relevant to its language;
    * ignoring it entirely leaves output unchanged. Formatting (Day 11) is applied

@@ -32,7 +32,11 @@ import { assembleBlueprint } from './core/assemble.js';
  * UI==CLI is STRUCTURAL: the wizard sending these same choices assembles the same state.
  */
 export function buildDemoAppModel(
-  overrides: { backend?: string; database?: string; projectType?: 'Web App' | 'API-only' } = {},
+  overrides: {
+    backend?: string;
+    database?: string;
+    projectType?: 'Web App' | 'API-only' | 'Cron Worker' | 'Queue Consumer';
+  } = {},
 ): ProjectModel {
   return assembleBlueprint({
     // Phase A — answered once, up front (these mirror the original Step-1 inputs

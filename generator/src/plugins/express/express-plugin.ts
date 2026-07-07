@@ -23,6 +23,7 @@ import { postgresProvider } from '../database/postgres.js';
 import {
   generateEntityFiles,
   generateSimpleEntityFiles,
+  generateWorkerEntityFiles,
   describeEntityDefaults as describeExpressEntityDefaults,
   type EntityCodegenContext,
 } from './entity-codegen.js';
@@ -356,6 +357,293 @@ function wireAiMount(raw: string): string {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Worker archetypes (Day 34). cron-worker + queue-consumer are ENTRYPOINT /
+// LIFECYCLE projections that REUSE the domain layer (db/migrate/seed/auth +
+// per-entity model/repo/dto/service) UNCHANGED and swap ONLY the HTTP entrypoint
+// (src/server.js + src/app.js — the listen + the router auto-mount / "route
+// table") for a scheduler (cron) or a broker+consume-loop (queue), plus a
+// per-entity handler in place of the entity HTTP route/controller layer.
+//
+// A LITERAL BYPASS for 'Web App' / 'API-only' (isWorker is false) — the frozen
+// backstop is byte-identical. setInterval is a Node BUILTIN (no dep); the queue
+// broker driver (amqplib) is a GENERATED-PROJECT dependency GATED on the type
+// (Thraksha core stays deps {}). No AI (ADR-001). Deterministic string templates.
+// ---------------------------------------------------------------------------
+
+/** cron-worker entrypoint: migrate → seed → run once → setInterval tick (builtin, no dep). */
+const CRON_WORKER_JS = [
+  `'use strict';`,
+  ``,
+  `// Entry point (cron-worker): run migrations, seed, then start the scheduler.`,
+  `// setInterval is a Node builtin — NO dependency. Each entity job is idempotent,`,
+  `// so a tick may fire many times safely (see src/scheduler.js).`,
+  `const migrate = require('./migrate');`,
+  `const seed = require('./seed');`,
+  `const { runAllJobs } = require('./scheduler');`,
+  ``,
+  `const INTERVAL_MS = Number(process.env.CRON_INTERVAL_MS || 60000);`,
+  ``,
+  `async function start() {`,
+  `  await migrate();`,
+  `  await seed();`,
+  `  await runAllJobs(); // run once at startup`,
+  `  setInterval(() => {`,
+  `    runAllJobs().catch((err) => console.error('cron tick failed:', err));`,
+  `  }, INTERVAL_MS);`,
+  `  console.log('__PROJECT_NAME__ cron worker started (interval ' + INTERVAL_MS + 'ms)');`,
+  `}`,
+  ``,
+  `start().catch((err) => {`,
+  `  console.error('Failed to start:', err);`,
+  `  process.exit(1);`,
+  `});`,
+  ``,
+].join('\n');
+
+/** cron-worker job table: auto-discovers every entity's <name>.job.js (the "route table" analog). */
+const CRON_SCHEDULER_JS = [
+  `'use strict';`,
+  ``,
+  `// The job table (the cron equivalent of app.js's router auto-mount): every`,
+  `// src/entities/<name>/<name>.job.js is discovered and run each tick, in sorted`,
+  `// (deterministic) order. Each job's run() is idempotent.`,
+  `const fs = require('fs');`,
+  `const path = require('path');`,
+  ``,
+  `function loadJobs() {`,
+  `  const jobs = [];`,
+  `  const entitiesDir = path.join(__dirname, 'entities');`,
+  `  if (fs.existsSync(entitiesDir)) {`,
+  `    for (const name of fs.readdirSync(entitiesDir).sort()) {`,
+  `      const jobFile = path.join(entitiesDir, name, name + '.job.js');`,
+  `      if (fs.existsSync(jobFile)) jobs.push({ name, job: require(jobFile) });`,
+  `    }`,
+  `  }`,
+  `  return jobs;`,
+  `}`,
+  ``,
+  `// Run every entity job to completion (idempotent). Returns the total processed.`,
+  `async function runAllJobs() {`,
+  `  let processed = 0;`,
+  `  for (const { name, job } of loadJobs()) {`,
+  `    const n = await job.run();`,
+  `    processed += typeof n === 'number' ? n : 0;`,
+  `    console.log('cron job ' + name + ' completed');`,
+  `  }`,
+  `  return processed;`,
+  `}`,
+  ``,
+  `module.exports = { runAllJobs, loadJobs };`,
+  ``,
+].join('\n');
+
+/** queue-consumer entrypoint: migrate → seed → broker.connect → subscribe each topic. */
+const QUEUE_WORKER_JS = [
+  `'use strict';`,
+  ``,
+  `// Entry point (queue-consumer): run migrations, seed, then connect to the broker`,
+  `// and consume. The broker connection is behind ./broker so the consume loop +`,
+  `// the topic→handler table (src/dispatcher.js) are broker-agnostic and testable`,
+  `// with a stub — no real broker is needed to exercise the handler/ack path.`,
+  `const migrate = require('./migrate');`,
+  `const seed = require('./seed');`,
+  `const { connect } = require('./broker');`,
+  `const { dispatch, topics } = require('./dispatcher');`,
+  ``,
+  `async function start() {`,
+  `  await migrate();`,
+  `  await seed();`,
+  `  const broker = await connect();`,
+  `  // Subscribe every topic in the handler table; each delivered message is routed`,
+  `  // to its handler with ack / retry / dead-letter (see src/dispatcher.js).`,
+  `  for (const topic of topics()) {`,
+  `    await broker.subscribe(topic, (message) => dispatch(topic, message, broker));`,
+  `  }`,
+  `  console.log('__PROJECT_NAME__ queue consumer started (' + topics().length + ' topics)');`,
+  `}`,
+  ``,
+  `start().catch((err) => {`,
+  `  console.error('Failed to start:', err);`,
+  `  process.exit(1);`,
+  `});`,
+  ``,
+].join('\n');
+
+/** queue-consumer dispatcher: the topic→handler table + ack/retry/dead-letter. */
+const QUEUE_DISPATCHER_JS = [
+  `'use strict';`,
+  ``,
+  `// The topic→handler table (the queue equivalent of app.js's router auto-mount):`,
+  `// every src/entities/<name>/<name>.handler.js contributes its topics. dispatch()`,
+  `// runs one message through its handler with ack / retry / dead-letter.`,
+  `const fs = require('fs');`,
+  `const path = require('path');`,
+  ``,
+  `const MAX_ATTEMPTS = Number(process.env.QUEUE_MAX_ATTEMPTS || 3);`,
+  ``,
+  `function loadHandlers() {`,
+  `  const table = {};`,
+  `  const entitiesDir = path.join(__dirname, 'entities');`,
+  `  if (fs.existsSync(entitiesDir)) {`,
+  `    for (const name of fs.readdirSync(entitiesDir).sort()) {`,
+  `      const handlerFile = path.join(entitiesDir, name, name + '.handler.js');`,
+  `      if (fs.existsSync(handlerFile)) {`,
+  `        const mod = require(handlerFile);`,
+  `        for (const topic of Object.keys(mod.handlers).sort()) {`,
+  `          table[topic] = mod.handlers[topic];`,
+  `        }`,
+  `      }`,
+  `    }`,
+  `  }`,
+  `  return table;`,
+  `}`,
+  ``,
+  `const HANDLERS = loadHandlers();`,
+  ``,
+  `function topics() {`,
+  `  return Object.keys(HANDLERS).sort();`,
+  `}`,
+  ``,
+  `// Route one message to its handler. Success -> ack. A transient failure -> retry`,
+  `// (requeue with an incremented attempt) until MAX_ATTEMPTS; a poison message`,
+  `// (attempts exhausted, or no handler) -> dead-letter. The broker supplies`,
+  `// ack/retry/deadLetter, so this loop is testable with a stub broker.`,
+  `async function dispatch(topic, message, broker) {`,
+  `  const handler = HANDLERS[topic];`,
+  `  if (!handler) {`,
+  `    await broker.deadLetter(topic, message, 'no handler for topic');`,
+  `    return { outcome: 'dead-letter', reason: 'no handler' };`,
+  `  }`,
+  `  const attempt = (message && message.attempt ? message.attempt : 0) + 1;`,
+  `  try {`,
+  `    await handler(message.payload, { topic, attempt });`,
+  `    await broker.ack(message);`,
+  `    return { outcome: 'ack', attempt };`,
+  `  } catch (err) {`,
+  `    if (attempt < MAX_ATTEMPTS) {`,
+  `      await broker.retry(topic, Object.assign({}, message, { attempt }), err);`,
+  `      return { outcome: 'retry', attempt };`,
+  `    }`,
+  `    await broker.deadLetter(topic, message, err && err.message ? err.message : String(err));`,
+  `    return { outcome: 'dead-letter', attempt };`,
+  `  }`,
+  `}`,
+  ``,
+  `module.exports = { dispatch, topics, loadHandlers, HANDLERS, MAX_ATTEMPTS };`,
+  ``,
+].join('\n');
+
+/** queue-consumer broker: the amqplib connection, WIRED but INERT until QUEUE_URL is set. */
+const QUEUE_BROKER_JS = [
+  `'use strict';`,
+  ``,
+  `// The broker connection (AMQP / RabbitMQ via amqplib). WIRED but INERT until`,
+  `// QUEUE_URL is set: connect() throws a clear error if unconfigured, so nothing`,
+  `// connects at import time. The consume loop + dispatcher are broker-agnostic and`,
+  `// unit-testable with a stub broker (subscribe/ack/retry/deadLetter). amqplib is a`,
+  `// GENERATED-PROJECT dependency (package.json), never the generator's.`,
+  `const amqp = require('amqplib');`,
+  ``,
+  `const QUEUE_URL = process.env.QUEUE_URL || '';`,
+  ``,
+  `function isConfigured() {`,
+  `  return Boolean(QUEUE_URL);`,
+  `}`,
+  ``,
+  `// Connect and return the broker interface the dispatcher uses. Call only at`,
+  `// startup from worker.js — never at import time.`,
+  `async function connect() {`,
+  `  if (!isConfigured()) {`,
+  `    throw new Error('Queue is not configured — set QUEUE_URL in the environment.');`,
+  `  }`,
+  `  const connection = await amqp.connect(QUEUE_URL);`,
+  `  const channel = await connection.createChannel();`,
+  `  return {`,
+  `    async subscribe(topic, onMessage) {`,
+  `      await channel.assertQueue(topic, { durable: true });`,
+  `      await channel.consume(topic, (msg) => {`,
+  `        if (!msg) return;`,
+  `        const payload = JSON.parse(msg.content.toString());`,
+  `        const attempt = (msg.properties.headers && msg.properties.headers.attempt) || 0;`,
+  `        onMessage({ payload, attempt, raw: msg });`,
+  `      });`,
+  `    },`,
+  `    async ack(message) {`,
+  `      if (message && message.raw) channel.ack(message.raw);`,
+  `    },`,
+  `    async retry(topic, message) {`,
+  `      // Requeue with the incremented attempt count for another try.`,
+  `      channel.sendToQueue(topic, Buffer.from(JSON.stringify(message.payload)), {`,
+  `        headers: { attempt: message.attempt },`,
+  `      });`,
+  `      if (message && message.raw) channel.ack(message.raw);`,
+  `    },`,
+  `    async deadLetter(topic, message, reason) {`,
+  `      // Route poison messages to a per-topic dead-letter queue.`,
+  `      const dlq = topic + '.dead';`,
+  `      await channel.assertQueue(dlq, { durable: true });`,
+  `      channel.sendToQueue(dlq, Buffer.from(JSON.stringify({ payload: message.payload, reason })));`,
+  `      if (message && message.raw) channel.ack(message.raw);`,
+  `    },`,
+  `  };`,
+  `}`,
+  ``,
+  `module.exports = { connect, isConfigured, QUEUE_URL };`,
+  ``,
+].join('\n');
+
+/**
+ * Point package.json's main/start at the worker entrypoint (src/worker.js) instead
+ * of the HTTP server, and — for queue-consumer only — add the amqplib broker driver
+ * as a GENERATED-PROJECT dependency (gated on the type; Thraksha core stays deps {}).
+ * Runs on the RAW template (before token substitution), so it anchors on the token line.
+ */
+function workerPackageJson(raw: string, kind: 'cron' | 'queue'): string {
+  let out = raw
+    .split(`"main": "src/server.js"`).join(`"main": "src/worker.js"`)
+    .split(`"start": "node src/server.js"`).join(`"start": "node src/worker.js"`);
+  if (kind === 'queue') {
+    out = out.replace(
+      `    "__DB_NODE_DRIVER__": "__DB_NODE_DRIVER_VERSION__"`,
+      `    "__DB_NODE_DRIVER__": "__DB_NODE_DRIVER_VERSION__",\n    "amqplib": "0.10.4"`,
+    );
+  }
+  return out;
+}
+
+/** Append a truthful worker section to the README (the HTTP run instructions no longer apply). */
+function addWorkerReadme(raw: string, kind: 'cron' | 'queue'): string {
+  const lines =
+    kind === 'cron'
+      ? [
+          ``,
+          `## Cron worker (project type: Cron Worker)`,
+          ``,
+          `This project is a **scheduler**, not an HTTP server: \`src/worker.js\` runs the`,
+          `migrations and seed, then ticks on an interval (\`CRON_INTERVAL_MS\`, default`,
+          `60000ms) via Node's built-in \`setInterval\` — **no scheduler dependency**.`,
+          `\`src/scheduler.js\` auto-discovers every \`src/entities/<name>/<name>.job.js\` and`,
+          `runs each idempotent job. The jobs reuse the SAME domain services the HTTP API`,
+          `would (\`<name>.service.js\`); there are no HTTP routes. Start with \`npm start\`.`,
+          ``,
+        ]
+      : [
+          ``,
+          `## Queue consumer (project type: Queue Consumer)`,
+          ``,
+          `This project is a **message consumer**, not an HTTP server: \`src/worker.js\` runs`,
+          `the migrations and seed, connects to the broker (\`src/broker.js\`, AMQP/RabbitMQ`,
+          `via \`amqplib\` — set \`QUEUE_URL\`), and subscribes every topic. \`src/dispatcher.js\``,
+          `is the topic→handler table: it routes each message to its handler with`,
+          `**ack / retry / dead-letter** (retries up to \`QUEUE_MAX_ATTEMPTS\`, default 3).`,
+          `Handlers live in \`src/entities/<name>/<name>.handler.js\` and call the SAME`,
+          `domain services the HTTP API would; there are no HTTP routes. Start with \`npm start\`.`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 export interface ExpressPluginOptions {
   /** Override the bundled templates directory (tests only). */
   templatesDir?: string;
@@ -381,10 +669,29 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
       // Day 18: the AI hook adds a detachable /api/ai/* surface (built-in fetch, no
       // new dependency); a LITERAL BYPASS otherwise. Independent of email.
       const ai = model.getIntegrations().ai === 'hook';
+      // Day 34: the worker archetypes swap the HTTP entrypoint (server.js/app.js)
+      // for a scheduler (cron) or a broker+consume-loop (queue). A LITERAL BYPASS
+      // for 'Web App'/'API-only' (isWorker false) — the domain templates are reused
+      // unchanged, so the frozen backstop is byte-identical.
+      const projectType = model.getPhaseASettings().projectType;
+      const workerKind: 'cron' | 'queue' | null =
+        projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
+        // Worker types swap the HTTP entrypoint: skip the two HTTP-only shell files
+        // (server.js = listen, app.js = the router auto-mount / route table). Every
+        // other template (db/migrate/seed/auth/http-error/Dockerfile/compose/migrations)
+        // is the domain layer, reused unchanged.
+        if (workerKind && (relRaw === 'src/server.js' || relRaw === 'src/app.js')) continue;
         let raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
+        if (workerKind) {
+          // Repoint main/start at the worker entrypoint (+ amqplib dep for queue),
+          // and append a truthful worker section to the README (the HTTP run
+          // instructions no longer apply).
+          if (relRaw === 'package.json') raw = workerPackageJson(raw, workerKind);
+          else if (relRaw === 'README.md') raw = addWorkerReadme(raw, workerKind);
+        }
         if (email) {
           if (relRaw === 'package.json') raw = addNodemailerDep(raw);
           else if (relRaw === 'src/app.js') raw = wireEmailRequire(raw);
@@ -410,6 +717,17 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
         // The AI client the app calls (built-in fetch) — mounted on /api/ai/*, inert until keyed.
         files.push({ relPath: 'src/ai.js', content: AI_SERVICE_JS, ownership: 'thraksha' });
       }
+      // Day 34: the worker entrypoint + route/handler-table shell (in place of the
+      // skipped server.js/app.js). Deterministic string templates (token-substituted
+      // like every other shell file); the per-entity job/handler comes from generateEntity.
+      if (workerKind === 'cron') {
+        files.push({ relPath: 'src/worker.js', content: applyTokens(CRON_WORKER_JS, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'src/scheduler.js', content: applyTokens(CRON_SCHEDULER_JS, tokens), ownership: 'thraksha' });
+      } else if (workerKind === 'queue') {
+        files.push({ relPath: 'src/worker.js', content: applyTokens(QUEUE_WORKER_JS, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'src/dispatcher.js', content: applyTokens(QUEUE_DISPATCHER_JS, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'src/broker.js', content: applyTokens(QUEUE_BROKER_JS, tokens), ownership: 'thraksha' });
+      }
       // Databases without RETURNING (e.g. MySQL) need a different runtime driver
       // module; swap src/db.js for the mysql2 adapter. Postgres keeps the bundled
       // pg pool template unchanged (byte-identical).
@@ -428,6 +746,12 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
         supportsReturning: database.runtime.supportsReturning,
         naming: context.style.namingConvention, // Day 12: wire-key naming
       };
+      // Day 34: worker types swap the entity's HTTP route/controller layer for a
+      // job (cron) / handler (queue), reusing the domain files byte-identically. A
+      // LITERAL BYPASS for Web App/API-only (the 20 hashes stay frozen).
+      const projectType = context.projectType;
+      if (projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
+      if (projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
       // Day 13: architectureDepth branches the FILE SET. 'default' is a literal
       // bypass (generateEntityFiles untouched → the 20 hashes are frozen).
       return context.style.architectureDepth === 'simple'

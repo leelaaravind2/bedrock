@@ -955,6 +955,130 @@ function buildRoutesDevSimple(entity: Entity): string {
 }
 
 // ---------------------------------------------------------------------------
+// Worker archetypes (Day 34) — cron-worker + queue-consumer. Both REUSE the
+// domain layer BYTE-IDENTICALLY (model/repository/dto/service.base/migration +
+// the developer service seam) and swap ONLY the HTTP route/controller layer
+// (controller.base + routes.base + routes.js) for a worker handler:
+//   - cron:  <slug>.job.js     — an idempotent scan over the domain service.
+//   - queue: <slug>.handler.js — a topic→handler map calling the domain service.
+// So diffing a worker entity against its api-only twin shows the domain files
+// identical and ONLY the route/handler layer differing (the DC-3 reuse proof).
+// ---------------------------------------------------------------------------
+
+/** The system context a worker handler/job runs under (no HTTP request). */
+function workerCtxLiteral(ctx: EntityCodegenContext): string {
+  // Multi-user rows are owner-scoped; a system worker carries a null owner (the
+  // developer narrows it to a specific owner). Single-user: an empty context.
+  return ctx.multiUser ? `{ ownerId: null }` : `{}`;
+}
+
+/** The idempotent cron job for one entity — an idempotent scan over the domain service. */
+function buildCronJob(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  return [
+    `'use strict';`,
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// Cron job for ${name}: an idempotent scan over the SAME domain service the`,
+    `// HTTP API uses (${slug}.service.js). No HTTP route — the scheduler calls run()`,
+    `// on each tick. Re-running produces the same effect (idempotent by design).`,
+    `const service = require('./${slug}.service');`,
+    ``,
+    `// The system context this job runs under (no HTTP request).`,
+    `const ctx = ${workerCtxLiteral(ctx)};`,
+    ``,
+    `// Idempotent: list the current ${name} rows through the domain service and`,
+    `// process each. The default processItem() is a safe no-op; add real per-item`,
+    `// work here — it must stay idempotent (a tick may run many times).`,
+    `async function run() {`,
+    `  const items = await service.list(ctx);`,
+    `  for (const item of items) {`,
+    `    await processItem(item);`,
+    `  }`,
+    `  return items.length;`,
+    `}`,
+    ``,
+    `async function processItem(item) {`,
+    `  // Idempotent per-item work goes here (default: a no-op scan).`,
+    `  return item;`,
+    `}`,
+    ``,
+    `module.exports = { run, processItem };`,
+    ``,
+  ].join('\n');
+}
+
+/** The queue topic→handler map for one entity — each handler calls the domain service. */
+function buildQueueHandler(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  return [
+    `'use strict';`,
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// Queue handlers for ${name}: a topic→handler map calling the SAME domain`,
+    `// service the HTTP API uses (${slug}.service.js). No HTTP route — the`,
+    `// dispatcher routes each message topic to its handler with ack/retry/dead-letter.`,
+    `const service = require('./${slug}.service');`,
+    `const { validate } = require('./${slug}.dto');`,
+    ``,
+    `// The system context these handlers run under (no HTTP request).`,
+    `const ctx = ${workerCtxLiteral(ctx)};`,
+    ``,
+    `// Topic → handler. Each handler processes one message payload through the`,
+    `// domain service; the payload is validated exactly as an HTTP body would be.`,
+    `const handlers = {`,
+    `  '${slug}.created': async (payload) => {`,
+    `    return service.create(ctx, validate(payload));`,
+    `  },`,
+    `  '${slug}.updated': async (payload) => {`,
+    `    return service.update(ctx, Number(payload.id), validate(payload));`,
+    `  },`,
+    `};`,
+    ``,
+    `module.exports = { handlers };`,
+    ``,
+  ].join('\n');
+}
+
+/**
+ * The worker entity file set (Day 34): the domain layer BYTE-IDENTICAL to the
+ * layered api-only file set (buildModel/buildRepository/buildDto/buildServiceBase/
+ * buildMigration + the developer service.js), MINUS the HTTP route/controller
+ * layer (controller.base/routes.base/routes.js), PLUS the worker handler
+ * (<slug>.job.js for cron, <slug>.handler.js for queue). This is the projection
+ * that reuses the domain and swaps only the route/handler layer.
+ */
+export function generateWorkerEntityFiles(
+  entity: Entity,
+  ctx: EntityCodegenContext,
+  kind: 'cron' | 'queue',
+): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f, ctx.sql);
+  const slug = entitySlug(entity);
+  const dir = `src/entities/${slug}`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+
+  const workerLayer: GeneratedFile[] =
+    kind === 'cron'
+      ? [{ relPath: `${dir}/${slug}.job.js`, content: buildCronJob(entity, ctx), ownership: 'thraksha' }]
+      : [{ relPath: `${dir}/${slug}.handler.js`, content: buildQueueHandler(entity, ctx), ownership: 'thraksha' }];
+
+  return [
+    // Domain layer — BYTE-IDENTICAL to the api-only twin (the same builders/ctx).
+    { relPath: `${dir}/${slug}.model.js`, content: buildModel(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.repository.js`, content: buildRepository(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.dto.js`, content: buildDto(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.service.base.js`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `migrations/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    // The developer service seam — reused unchanged (the job/handler wraps it).
+    { relPath: `${dir}/${slug}.service.js`, content: buildServiceDev(entity), ownership: 'developer' },
+    // Swapped: the worker handler replaces the HTTP controller.base/routes.base/routes.js.
+    ...workerLayer,
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Public API.
 // ---------------------------------------------------------------------------
 
