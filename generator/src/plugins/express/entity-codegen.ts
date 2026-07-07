@@ -96,6 +96,60 @@ function belongsToRels(entity: Entity): Relationship[] {
   return entity.relationships.filter((r) => r.kind === 'belongs-to');
 }
 
+// ---------------------------------------------------------------------------
+// has-many (Day 25) — the REVERSE projection of a belongs-to FK. NO schema
+// change: the child already carries `<parent>_id` (its belongs-to). has-many
+// adds ONLY a parent-side collection accessor — a nested route
+// `GET /api/<parents>/:id/<children>` querying the child table by the existing
+// FK column (owner-scoped when multi-user). Emission is always a loop over
+// hasManyRels, so has-many-free entities are byte-identical (a literal bypass,
+// exactly like belongs-to). The child table + FK column are derived by the SAME
+// convention belongs-to uses, so no child-side change is needed.
+// ---------------------------------------------------------------------------
+
+/** The has-many relationships on an entity, in authored order (deterministic). */
+function hasManyRels(entity: Entity): Relationship[] {
+  return entity.relationships.filter((r) => r.kind === 'has-many');
+}
+
+/** The child table for a has-many, e.g. has-many Application -> applications. */
+function childTable(rel: Relationship): string {
+  return pluralize(snakeCase(rel.target));
+}
+
+/** The child's FK column back to THIS parent, e.g. parent Team -> team_id. */
+function reverseFkColumn(parent: Entity): string {
+  return `${snakeCase(parent.name)}_id`;
+}
+
+/**
+ * The nested reverse-collection routes for a parent's has-many relationships.
+ * Empty for a has-many-free entity (byte-identical bypass). Each route queries the
+ * child table by the existing FK column, owner-scoped when multi-user (matching the
+ * findAll pattern). SELECT * returns the child rows (deterministic given the schema).
+ */
+function reverseRouteLines(entity: Entity, ctx: EntityCodegenContext): string[] {
+  const rels = hasManyRels(entity);
+  if (rels.length === 0) return [];
+  const fk = reverseFkColumn(entity);
+  const lines: string[] = [];
+  for (const r of rels) {
+    const table = childTable(r);
+    const where = ctx.multiUser ? `${fk} = $1 AND owner_id = $2` : `${fk} = $1`;
+    const params = ctx.multiUser ? `[Number(req.params.id), req.userId]` : `[Number(req.params.id)]`;
+    lines.push(
+      `  // has-many ${entity.name} -> ${r.target}: the parent's ${table} (reverse of the ${fk} FK).`,
+      `  router.get('/:id/${table}', async (req, res, next) => {`,
+      `    try {`,
+      `      const { rows } = await pool.query('SELECT * FROM ${table} WHERE ${where} ORDER BY id', ${params});`,
+      `      res.json(rows);`,
+      `    } catch (e) { next(e); }`,
+      `  });`,
+    );
+  }
+  return lines;
+}
+
 /** FK DB column, e.g. Application -> application_id. */
 function fkColumnName(rel: Relationship): string {
   return `${snakeCase(rel.target)}_id`;
@@ -534,13 +588,17 @@ function buildControllerBase(entity: Entity, ctx: EntityCodegenContext): string 
   ].join('\n');
 }
 
-function buildRoutesBase(entity: Entity): string {
+function buildRoutesBase(entity: Entity, ctx: EntityCodegenContext): string {
   const name = entity.name;
+  // has-many (Day 25): the reverse-collection routes query the child table, so this
+  // router needs `pool` — gated, so a has-many-free entity stays byte-identical.
+  const reverse = reverseRouteLines(entity, ctx);
   return [
     `'use strict';`,
     `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
     `// Builds the standard CRUD router for ${name}, wired to the controller.`,
     `const express = require('express');`,
+    ...(reverse.length > 0 ? [`const pool = require('../../db');`] : []),
     ``,
     `function build${name}Router(controller) {`,
     `  const router = express.Router();`,
@@ -549,6 +607,7 @@ function buildRoutesBase(entity: Entity): string {
     `  router.post('/', controller.create);`,
     `  router.put('/:id', controller.update);`,
     `  router.delete('/:id', controller.remove);`,
+    ...reverse,
     `  return router;`,
     `}`,
     ``,
@@ -803,6 +862,9 @@ function buildExpressCrudBase(entity: Entity, ctx: EntityCodegenContext): string
     `  router.delete('/:id', async (req, res, next) => {`,
     `    try { await service.remove(ctxOf(req), Number(req.params.id)); res.status(204).end(); } catch (e) { next(e); }`,
     `  });`,
+    // has-many (Day 25): the reverse-collection routes (empty for a has-many-free
+    // entity — byte-identical). pool is already required in crud.base above.
+    ...reverseRouteLines(entity, ctx),
     `  return router;`,
     `}`,
     ``,
@@ -875,7 +937,7 @@ export function generateEntityFiles(entity: Entity, ctx: EntityCodegenContext): 
     { relPath: `${dir}/${slug}.dto.js`, content: buildDto(entity, ctx), ownership: 'thraksha' },
     { relPath: `${dir}/${slug}.service.base.js`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
     { relPath: `${dir}/${slug}.controller.base.js`, content: buildControllerBase(entity, ctx), ownership: 'thraksha' },
-    { relPath: `${dir}/${slug}.routes.base.js`, content: buildRoutesBase(entity), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.routes.base.js`, content: buildRoutesBase(entity, ctx), ownership: 'thraksha' },
     { relPath: `migrations/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
 
     // DEVELOPER-OWNED — created once, then never touched again.
@@ -933,6 +995,11 @@ export function describeEntityDefaults(entity: Entity): string[] {
   for (const r of belongsToRels(entity)) {
     const req = r.required ? 'required=true' : 'required=false (default: optional)';
     lines.push(`${entity.name} belongs-to ${r.target}: ${fkColumnName(r)}, ${req}`);
+  }
+  // has-many (Day 25) — the reverse projection: a parent-side collection accessor
+  // (GET /api/<parents>/:id/<children>) over the child's existing FK. No schema change.
+  for (const r of hasManyRels(entity)) {
+    lines.push(`${entity.name} has-many ${r.target}: GET /api/${tableName(entity)}/:id/${childTable(r)} (reverse of ${reverseFkColumn(entity)}, no schema change)`);
   }
   return lines;
 }

@@ -662,6 +662,76 @@ async function main(): Promise<void> {
     record(defaultOffOk, 'DEFAULT OFF is structural: no key → no filler / no call site (a key → the developer’s config); Thraksha ships no key');
   }
 
+  // ══ PART 1m — has-many relationships: the reverse projection (Eco-Day 25) ═════
+  // has-many is the REVERSE of the belongs-to FK. NO schema change: the child already
+  // carries <parent>_id; has-many adds ONLY a parent-side collection accessor
+  // (GET /api/<parents>/:id/<children>) querying the child by the existing FK. The
+  // default (no has-many) is a literal bypass — no frozen fixture declares has-many, so
+  // the 50 digests above are byte-identical. This records the additive has-many baselines
+  // (EXPRESS this pass — the booted stack; the other 4 stacks are staged, see the report).
+  process.stdout.write('\n=== PART 1m: has-many reverse projection (Eco-Day 25 — Express) ===\n');
+  {
+    // A has-many fixture: Team has-many Application; Application belongs-to Team (the FK on the child).
+    const hm = (backend: string, database: string) => {
+      const m = createProjectModel({ projectName: 'DemoApp', projectType: 'Web App', backend, frontend: 'React', database, multiUser: true, auth: 'Simple login' });
+      m.addEntity({ name: 'Team', fields: [{ name: 'name', type: 'String', required: true }], relationships: [{ kind: 'has-many', target: 'Application' }] });
+      m.addEntity({ name: 'Application', fields: [{ name: 'title', type: 'String', required: true }], relationships: [{ kind: 'belongs-to', target: 'Team' }] });
+      return m;
+    };
+    // The belongs-to-ONLY twin (same entities, NO has-many on Team) — to prove has-many
+    // changes ONLY the parent-side accessor, never the schema/child code.
+    const boOnly = (backend: string, database: string) => {
+      const m = createProjectModel({ projectName: 'DemoApp', projectType: 'Web App', backend, frontend: 'React', database, multiUser: true, auth: 'Simple login' });
+      m.addEntity({ name: 'Team', fields: [{ name: 'name', type: 'String', required: true }] });
+      m.addEntity({ name: 'Application', fields: [{ name: 'title', type: 'String', required: true }], relationships: [{ kind: 'belongs-to', target: 'Team' }] });
+      return m;
+    };
+
+    // (a) additive baselines: Express × {PostgreSQL, MySQL}, twice-identical == recorded.
+    const EXPRESS_HM: Record<string, string> = {
+      PostgreSQL: '46662579ff6b0905e46c1d41e40ef7787921d7188146a9c78b6dfc4f90f137f8',
+      MySQL: '0daab037f5663e3abddab93e721a78d17adada5c652dd2801bb0f576f0f04c53',
+    };
+    for (const db of DATABASES) {
+      const a = hashFiles(await filesOf(hm('Express', db)));
+      const b = hashFiles(await filesOf(hm('Express', db)));
+      bake(`HASMANY|Express|${db}`, a);
+      record(a === b && a === EXPRESS_HM[db], `Express|${db} has-many twice-identical == recorded additive baseline`, a.slice(0, 16));
+    }
+
+    // (b) NO SCHEMA CHANGE: the migration files are byte-identical between has-many and the
+    // belongs-to-only twin — the FK already exists; has-many adds NO column/migration.
+    const hmFiles = await filesOf(hm('Express', 'PostgreSQL'));
+    const boMap = new Map((await filesOf(boOnly('Express', 'PostgreSQL'))).map((f) => [f.relPath, f.content]));
+    const migDiff = hmFiles.filter((f) => /migrations\//.test(f.relPath) && boMap.get(f.relPath) !== f.content).map((f) => f.relPath);
+    const changed = hmFiles.filter((f) => boMap.get(f.relPath) !== f.content).map((f) => f.relPath);
+    record(migDiff.length === 0, 'NO schema change: migrations byte-identical vs belongs-to-only (the FK already exists on the child)', `migDiff=[${migDiff.join(',')}]`);
+    record(changed.every((p) => p === 'src/entities/team/team.routes.base.js' || p === 'GENERATION-MANIFEST.txt'),
+      'has-many changes ONLY the parent-side accessor (router) + the ADR-004 manifest note — runnable child code untouched', `changed=[${changed.join(',')}]`);
+
+    // (c) the reverse route + the manifest note are present in the real output.
+    const routes = hmFiles.find((f) => /team\.routes\.base\.js$/.test(f.relPath))!.content;
+    const manifest = hmFiles.find((f) => f.relPath === 'GENERATION-MANIFEST.txt')!.content;
+    const projOk =
+      /router\.get\('\/:id\/applications'/.test(routes) &&
+      /SELECT \* FROM applications WHERE team_id = \$1 AND owner_id = \$2 ORDER BY id/.test(routes) &&
+      /Team has-many Application: GET \/api\/teams\/:id\/applications/.test(manifest);
+    record(projOk, 'reverse accessor generated: GET /api/teams/:id/applications over the existing team_id FK (owner-scoped)');
+
+    // (d) UI==CLI (Day 16 seam): a has-many declared through assembleBlueprint == the
+    // programmatic createProjectModel+addEntity path, byte-identical (structural).
+    const choices: BlueprintChoices = {
+      settings: { projectName: 'DemoApp', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' },
+      entities: [
+        { name: 'Team', fields: [{ name: 'name', type: 'String', required: true }], relationships: [{ kind: 'has-many', target: 'Application' }] },
+        { name: 'Application', fields: [{ name: 'title', type: 'String', required: true }], relationships: [{ kind: 'belongs-to', target: 'Team' }] },
+      ],
+    };
+    const uiHash = hashFiles(await filesOf(assembleBlueprint(choices)));
+    const cliHash = hashFiles(await filesOf(hm('Express', 'PostgreSQL')));
+    record(uiHash === cliHash && uiHash === EXPRESS_HM.PostgreSQL, 'UI==CLI for has-many: assembleBlueprint == programmatic path, byte-identical', uiHash.slice(0, 16));
+  }
+
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
   process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);
