@@ -28,6 +28,7 @@
     "gen:snapshot": "node dist/generate-from-snapshot.js",
     "detect": "node dist/detect-demo.js",
     "bench:phase1": "node dist/phase1-benchmark.js",
+    "bench:phase2": "node dist/phase2-benchmark.js",
     "fill": "node dist/fill-demo.js",
     "ui": "node dist/server.js"
   },
