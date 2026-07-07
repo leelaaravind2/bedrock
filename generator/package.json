@@ -27,6 +27,7 @@
     "maxcell": "node dist/maxcell-driver.js",
     "gen:snapshot": "node dist/generate-from-snapshot.js",
     "detect": "node dist/detect-demo.js",
+    "bench:phase1": "node dist/phase1-benchmark.js",
     "ui": "node dist/server.js"
   },
   "devDependencies": {
