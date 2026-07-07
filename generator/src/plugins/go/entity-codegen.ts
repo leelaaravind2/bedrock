@@ -188,9 +188,19 @@ function fkFieldName(rel: Relationship): string {
   return `${pascalCase(rel.target)}ID`;
 }
 
-/** FK JSON key, e.g. Application -> applicationId. */
+/** FK JSON base key, e.g. Application -> applicationId. */
 function fkJsonKey(rel: Relationship): string {
   return `${decapitalize(rel.target)}Id`;
+}
+
+/**
+ * FK WIRE key (Day 29 — field-key consistency): the json tag / error-message key a belongs-to
+ * FK exposes, routed through the SAME naming transform declared fields use. default/camelCase
+ * leave `applicationId` unchanged (byte-identical); snake_case → `application_id`. The Go struct
+ * FIELD (fkFieldName, e.g. ApplicationID) is the internal identifier — unchanged.
+ */
+function fkWireKey(rel: Relationship, ctx: EntityCodegenContext): string {
+  return applyNaming(fkJsonKey(rel), ctx.naming);
 }
 
 /** Referenced table, e.g. Application -> applications. */
@@ -225,7 +235,7 @@ function buildModel(entity: Entity, ctx: EntityCodegenContext): string {
     lines.push(`\t${goFieldName(f)} ${goStructType(f)} ${jsonTag(wireKey(f, ctx))}`);
   }
   for (const r of belongsToRels(entity)) {
-    lines.push(`\t${fkFieldName(r)} ${fkStructType(r)} ${jsonTag(fkJsonKey(r))}`);
+    lines.push(`\t${fkFieldName(r)} ${fkStructType(r)} ${jsonTag(fkWireKey(r, ctx))}`);
   }
   if (ctx.multiUser) lines.push(`\tOwnerID   int64     ${jsonTag('ownerId')}`);
   lines.push(
@@ -435,7 +445,7 @@ function buildValidate(entity: Entity, ctx: EntityCodegenContext): string {
 
   const inputFields = [
     ...entity.fields.map((f) => `\t${goFieldName(f)} *${goBaseType(f)} ${jsonTag(wireKey(f, ctx))}`),
-    ...belongsToRels(entity).map((r) => `\t${fkFieldName(r)} *int64 ${jsonTag(fkJsonKey(r))}`),
+    ...belongsToRels(entity).map((r) => `\t${fkFieldName(r)} *int64 ${jsonTag(fkWireKey(r, ctx))}`),
   ];
 
   const checks: string[] = [];
@@ -459,7 +469,7 @@ function buildValidate(entity: Entity, ctx: EntityCodegenContext): string {
   // Required belongs-to FKs must be present (an integer parent id).
   for (const r of belongsToRels(entity)) {
     if (r.required) {
-      checks.push(`\tif in.${fkFieldName(r)} == nil {`, `\t\terrs = append(errs, "${fkJsonKey(r)} is required")`, `\t}`);
+      checks.push(`\tif in.${fkFieldName(r)} == nil {`, `\t\terrs = append(errs, "${fkWireKey(r, ctx)} is required")`, `\t}`);
     }
   }
 

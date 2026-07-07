@@ -413,7 +413,9 @@ function buildDto(entity: Entity, ctx: EntityCodegenContext): string {
   // Day 12: only when a declared field's wire key differs from its Java field name
   // do we emit @JsonProperty (and its import). Under 'default' — and for any
   // single-word field — nothing is emitted, so output stays byte-identical.
-  const needJsonProperty = entity.fields.some((f) => wireKey(f, ctx) !== f.name);
+  const needJsonProperty =
+    entity.fields.some((f) => wireKey(f, ctx) !== f.name) ||
+    belongsTo.some((r) => applyNaming(fkFieldName(r), ctx.naming) !== fkFieldName(r)); // Day 29: FK wire key
   // Exact decimal (Day 27): serialize BigDecimal as a STRING on the wire (Jackson emits it
   // as a JSON number by default) — gated, so a Decimal-free DTO is byte-identical.
   const needDecimal = entity.fields.some((f) => f.type === 'Decimal');
@@ -443,6 +445,11 @@ function buildDto(entity: Entity, ctx: EntityCodegenContext): string {
   }
   for (const r of belongsTo) {
     const ann = r.required ? [`    @NotNull`] : [];
+    // Day 29 (field-key consistency): the FK WIRE key follows the naming convention via
+    // @JsonProperty (the SAME pattern declared fields use) — only when it differs from the
+    // Java field name (default/camelCase ⇒ no annotation, byte-identical; snake_case ⇒ team_id).
+    const fkWire = applyNaming(fkFieldName(r), ctx.naming);
+    if (fkWire !== fkFieldName(r)) ann.push(`    @JsonProperty("${fkWire}")`);
     fieldDecls.push([...ann, `    private Long ${fkFieldName(r)};`].join('\n'));
   }
   fieldDecls.push(`    private Long ownerId;`);

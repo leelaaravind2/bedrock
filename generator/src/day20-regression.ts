@@ -113,8 +113,18 @@ const AI_HOOK: Record<string, string> = {
 
 // The canonical MAXIMAL-composition baseline (Eco-Day 1) — the reproducible
 // replacement for the retired, record-only, un-reproducible `33f3ec4b…`. Its input
-// is the committed fixture in maxcell-fixture.ts. ADDITIVE: moves none of the 43+10.
-const MAXIMAL = '929c379f9e98ec34c3a42bafe814ebb65fffde0820d754176a7c7ab95c825e20';
+// is the committed fixture in maxcell-fixture.ts (Express + snake_case + multi-edge FK).
+//
+// Eco-Day 29 — THE FIRST DELIBERATE RE-BASELINE (§1.1 documented exception):
+//   old: 929c379f9e98ec34c3a42bafe814ebb65fffde0820d754176a7c7ab95c825e20
+//   new: 366e19d9deda1cafcd6788e7fb703a66c7b113c3c6af2e66de932e08df3b7023
+//   why: field-key consistency — the belongs-to FK WIRE key now flows through the SAME
+//        applyNaming transform declared fields use, so under snake_case it emits
+//        team_id/application_id/ticket_id instead of the old mixed teamId/applicationId/
+//        ticketId. The DB column (already team_id) and the internal identifier are
+//        unchanged. This is the ONLY frozen fixture combining a non-default naming with
+//        an FK, so it is the ONLY baseline that moves (the mixed-key limitation closed).
+const MAXIMAL = '366e19d9deda1cafcd6788e7fb703a66c7b113c3c6af2e66de932e08df3b7023';
 
 // Non-default framework/version baselines (Eco-Day 11) — one per stack, DemoApp|PostgreSQL.
 // ADDITIVE: each is a NEW twice-identical baseline for a non-default pin; none replaces a frozen hash.
@@ -807,6 +817,56 @@ async function main(): Promise<void> {
       /must be a decimal string/.test(express) && /String\(body\./.test(express) && // Express: numeric-string + string storage
       /Price string/.test(go);                                                // Go: string end-to-end
     record(stringWire, 'string wire: Spring BigDecimal→ToStringSerializer, Express numeric-string, Go string (no float drift)');
+  }
+
+  // ══ PART 1o — field-key consistency: FK wire keys honor the naming convention (Eco-Day 29) ══
+  // Day 29 (THE FIRST DELIBERATE RE-BASELINE): the belongs-to FK WIRE key now flows through the
+  // SAME applyNaming transform declared fields use. Under snake_case, all 5 stacks now emit a
+  // snake_case FK wire key (Express/Go/Spring via the fix — they used camelCase; Python/Django
+  // ALREADY snake, untouched). The DB column + internal identifier are unchanged. These are
+  // ADDITIVE snake_case+FK coverage baselines (proving the fix across all 5 stacks); the ONLY
+  // frozen baseline that MOVED is MAXIMAL (see the MAXIMAL constant comment — 929c379f→366e19d9).
+  process.stdout.write('\n=== PART 1o: field-key consistency — FK wire keys honor the convention (Eco-Day 29) ===\n');
+  {
+    // A snake_case + belongs-to fixture: Application belongs-to Team (FK column team_id).
+    const fk = (backend: string) => {
+      const m = createProjectModel({ projectName: 'DemoApp', projectType: 'Web App', backend, frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' });
+      m.setStyle({ formatting: { indent: 'default' }, namingConvention: 'snake_case', architectureDepth: 'default' });
+      m.addEntity({ name: 'Team', fields: [{ name: 'name', type: 'String', required: true }] });
+      m.addEntity({ name: 'Application', fields: [{ name: 'title', type: 'String', required: true }], relationships: [{ kind: 'belongs-to', target: 'Team' }] });
+      return m;
+    };
+    const FKKEY: Record<string, string> = {
+      'Spring Boot': 'ad90ab93889f899b7042bf7c7c62f402088a6b7e6361d1e3652dfb24e837ae5c',
+      Express: 'f709a8dc428238d3f9a10824e45ace2b0875ddc0ba2a49793e51495f9ac22520',
+      FastAPI: '2e71abada1eca69bd27919f1ea4bb32d1d036a5496ef4263a566836eb9fa6d8b',
+      Django: '50b556789dea75995834d4d2dcd0c79471da9cdea98ec98d8ed9765c5d0753c4',
+      Go: '4a14711969d7a7c83655c0b832ea0124d5b4516d758abe9384c7ed6f88c46ad4',
+    };
+    // (a) additive baselines: snake_case+FK × 5 stacks, twice-identical == recorded.
+    for (const backend of Object.keys(FKKEY)) {
+      const a = hashFiles(await filesOf(fk(backend)));
+      const b = hashFiles(await filesOf(fk(backend)));
+      bake(`FKKEY|${backend}|snake`, a);
+      record(a === b && a === FKKEY[backend], `${backend} snake_case+FK twice-identical == recorded additive baseline`, a.slice(0, 16));
+    }
+
+    // (b) the FK WIRE key is snake_case (consistent with declared fields) in every stack —
+    // the mixed-key limitation closed. The DB column team_id is unchanged (always snake).
+    const wireKeyOf = async (backend: string, suffix: string) =>
+      (await filesOf(fk(backend))).find((f) => f.relPath.endsWith(suffix))!.content;
+    const exDto = await wireKeyOf('Express', 'application/application.dto.js');
+    const goHf = await wireKeyOf('Go', 'application/application.go');
+    const spDto = await wireKeyOf('Spring Boot', 'application/ApplicationDto.java');
+    const pySch = await wireKeyOf('FastAPI', 'application/schemas.py');
+    const djSer = await wireKeyOf('Django', 'application/serializers.py');
+    const consistent =
+      /body\.team_id/.test(exDto) && !/body\.teamId\b/.test(exDto) &&      // Express: wire key team_id (internal data.teamId stays)
+      /json:"team_id"/.test(goHf) &&                                        // Go: json tag team_id
+      /@JsonProperty\("team_id"\)/.test(spDto) &&                           // Spring: @JsonProperty("team_id")
+      /team_id:\s*(int|Optional\[int\])/.test(pySch) &&                     // FastAPI: schema field team_id
+      /"team"/.test(djSer);                                                 // Django: relation name (snake), already consistent
+    record(consistent, 'FK wire key is snake_case in all 5 stacks (Express/Go/Spring fixed; Python/Django already) — mixed-key closed');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

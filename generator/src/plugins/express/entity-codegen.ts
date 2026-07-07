@@ -156,9 +156,20 @@ function fkColumnName(rel: Relationship): string {
   return `${snakeCase(rel.target)}_id`;
 }
 
-/** FK data key on the JS object, e.g. Application -> applicationId. */
+/** FK INTERNAL data key on the JS object (the dto→repository contract), e.g. Application -> applicationId. */
 function fkDataKey(rel: Relationship): string {
   return `${decapitalize(rel.target)}Id`;
+}
+
+/**
+ * FK WIRE key (Day 29 — field-key consistency): the JSON key a belongs-to FK exposes,
+ * routed through the SAME naming transform declared fields use. 'default'/'camelCase' leave
+ * `applicationId` unchanged (byte-identical); 'snake_case' → `application_id`, so the FK key
+ * now matches the declared fields (closing the mixed-key limitation). The INTERNAL data key
+ * (fkDataKey) is unchanged — only the wire boundary (rowToObject LHS, body read) moves.
+ */
+function fkWireKey(rel: Relationship, ctx: EntityCodegenContext): string {
+  return applyNaming(fkDataKey(rel), ctx.naming);
 }
 
 /** Referenced table, e.g. Application -> applications. */
@@ -312,7 +323,7 @@ function buildRepository(entity: Entity, ctx: EntityCodegenContext): string {
   // `row.<column>` accessor (RHS) stays the snake_case DB column (Risk 1).
   const mapLines: string[] = [`    id: row.id,`];
   for (const f of fields) mapLines.push(`    ${wireKey(f, ctx)}: row.${columnName(f)},`);
-  for (const r of fkRels) mapLines.push(`    ${fkDataKey(r)}: row.${fkColumnName(r)},`);
+  for (const r of fkRels) mapLines.push(`    ${fkWireKey(r, ctx)}: row.${fkColumnName(r)},`);
   if (ctx.multiUser) mapLines.push(`    ownerId: row.owner_id,`);
   mapLines.push(`    createdAt: row.created_at,`, `    updatedAt: row.updated_at,`);
 
@@ -488,26 +499,32 @@ function validationLinesFor(field: Field, ctx: EntityCodegenContext): string[] {
   return lines;
 }
 
-/** Validation for a belongs-to FK (an integer parent id), keyed by <target>Id. */
-function fkValidationLines(rel: Relationship): string[] {
-  const n = fkDataKey(rel);
+/**
+ * Validation for a belongs-to FK (an integer parent id). Day 29: the WIRE key `w`
+ * (body reads + error messages) follows the naming convention (applyNaming); the INTERNAL
+ * data key `n` (data.<key> handed to the repository) is unchanged — exactly the split
+ * validationLinesFor uses for declared fields. Under default/camelCase w===n (byte-identical).
+ */
+function fkValidationLines(rel: Relationship, ctx: EntityCodegenContext): string[] {
+  const w = fkWireKey(rel, ctx); // wire key the client sends
+  const n = fkDataKey(rel); // internal data key the repository reads
   const lines: string[] = [];
   if (rel.required) {
-    lines.push(`  if (body.${n} === undefined || body.${n} === null || body.${n} === '') {`);
-    lines.push(`    errors.push('${n} is required');`);
+    lines.push(`  if (body.${w} === undefined || body.${w} === null || body.${w} === '') {`);
+    lines.push(`    errors.push('${w} is required');`);
     lines.push(`  }`);
   }
-  lines.push(`  if (body.${n} !== undefined && body.${n} !== null && !Number.isInteger(body.${n})) {`);
-  lines.push(`    errors.push('${n} must be an integer');`);
+  lines.push(`  if (body.${w} !== undefined && body.${w} !== null && !Number.isInteger(body.${w})) {`);
+  lines.push(`    errors.push('${w} must be an integer');`);
   lines.push(`  }`);
-  lines.push(`  data.${n} = body.${n} === undefined ? null : body.${n};`);
+  lines.push(`  data.${n} = body.${w} === undefined ? null : body.${w};`);
   return lines;
 }
 
 function buildDto(entity: Entity, ctx: EntityCodegenContext): string {
   const fieldBlocks = [
     ...entity.fields.map((f) => validationLinesFor(f, ctx).join('\n')),
-    ...belongsToRels(entity).map((r) => fkValidationLines(r).join('\n')),
+    ...belongsToRels(entity).map((r) => fkValidationLines(r, ctx).join('\n')),
   ];
   return [
     `'use strict';`,
@@ -751,7 +768,7 @@ function buildExpressCrudBase(entity: Entity, ctx: EntityCodegenContext): string
 
   const mapLines: string[] = [`    id: row.id,`];
   for (const f of fields) mapLines.push(`    ${wireKey(f, ctx)}: row.${columnName(f)},`);
-  for (const r of fkRels) mapLines.push(`    ${fkDataKey(r)}: row.${fkColumnName(r)},`);
+  for (const r of fkRels) mapLines.push(`    ${fkWireKey(r, ctx)}: row.${fkColumnName(r)},`);
   if (ctx.multiUser) mapLines.push(`    ownerId: row.owner_id,`);
   mapLines.push(`    createdAt: row.created_at,`, `    updatedAt: row.updated_at,`);
 
