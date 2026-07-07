@@ -101,6 +101,61 @@ function belongsToRels(entity: Entity): Relationship[] {
   return entity.relationships.filter((r) => r.kind === 'belongs-to');
 }
 
+// has-many (Day 25) — the REVERSE projection of a belongs-to FK. NO schema change: the
+// child already carries `<parent>_id`. has-many adds ONLY a parent-side collection route
+// (GET /api/<parents>/{id}/<children>) querying the child by the existing FK via a raw
+// text() SELECT. Emission loops over hasManyRels, so has-many-free entities are byte-identical.
+
+/** The has-many relationships on an entity, in authored order (deterministic). */
+function hasManyRels(entity: Entity): Relationship[] {
+  return entity.relationships.filter((r) => r.kind === 'has-many');
+}
+
+/** The child table for a has-many, e.g. has-many Application -> applications. */
+function childTable(rel: Relationship): string {
+  return pluralize(snakeCase(rel.target));
+}
+
+/** The child's FK column back to THIS parent, e.g. parent Team -> team_id. */
+function reverseFkColumn(parent: Entity): string {
+  return `${snakeCase(parent.name)}_id`;
+}
+
+/**
+ * The reverse-collection routes for a parent's has-many rels (empty for a has-many-free
+ * entity — byte-identical). Owner-scoped when multi-user. Uses a raw text() SELECT over
+ * the child table by the existing FK column; returns the rows as dicts.
+ */
+function reversePyRoutes(entity: Entity, ctx: EntityCodegenContext): string[] {
+  const rels = hasManyRels(entity);
+  if (rels.length === 0) return [];
+  const fk = reverseFkColumn(entity);
+  const lines: string[] = [];
+  for (const r of rels) {
+    const ct = childTable(r);
+    if (ctx.multiUser) {
+      lines.push(
+        ``,
+        `    @router.get("/{item_id}/${ct}")`,
+        `    def list_${ct}_of_${entitySlug(entity)}(item_id: int, db: Session = Depends(get_db), owner_id: int = Depends(require_user)):`,
+        `        # has-many ${entity.name} -> ${r.target}: the parent's ${ct} (reverse of the ${fk} FK).`,
+        `        rows = db.execute(text("SELECT * FROM ${ct} WHERE ${fk} = :pid AND owner_id = :oid ORDER BY id"), {"pid": item_id, "oid": owner_id}).mappings().all()`,
+        `        return [dict(row) for row in rows]`,
+      );
+    } else {
+      lines.push(
+        ``,
+        `    @router.get("/{item_id}/${ct}")`,
+        `    def list_${ct}_of_${entitySlug(entity)}(item_id: int, db: Session = Depends(get_db)):`,
+        `        # has-many ${entity.name} -> ${r.target}: the parent's ${ct} (reverse of the ${fk} FK).`,
+        `        rows = db.execute(text("SELECT * FROM ${ct} WHERE ${fk} = :pid ORDER BY id"), {"pid": item_id}).mappings().all()`,
+        `        return [dict(row) for row in rows]`,
+      );
+    }
+  }
+  return lines;
+}
+
 /** FK column / Python attribute name, e.g. Application -> application_id. */
 function fkColumnName(rel: Relationship): string {
   return `${snakeCase(rel.target)}_id`;
@@ -524,6 +579,7 @@ function buildRouterBase(entity: Entity, ctx: EntityCodegenContext): string {
       `"""`,
       `from fastapi import APIRouter, Depends, status`,
       `from sqlalchemy.orm import Session`,
+      ...(hasManyRels(entity).length > 0 ? [`from sqlalchemy import text`] : []),
       ``,
       `from app.auth import require_user`,
       `from app.db import get_db`,
@@ -563,6 +619,7 @@ function buildRouterBase(entity: Entity, ctx: EntityCodegenContext): string {
       `    @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)`,
       `    def delete_${slug}(item_id: int, db: Session = Depends(get_db), owner_id: int = Depends(require_user)):`,
       `        service.delete(db, item_id, owner_id)`,
+      ...reversePyRoutes(entity, ctx),
       ``,
       `    return router`,
       ``,
@@ -576,6 +633,7 @@ function buildRouterBase(entity: Entity, ctx: EntityCodegenContext): string {
     `"""`,
     `from fastapi import APIRouter, Depends, status`,
     `from sqlalchemy.orm import Session`,
+    ...(hasManyRels(entity).length > 0 ? [`from sqlalchemy import text`] : []),
     ``,
     `from app.auth import require_user`,
     `from app.db import get_db`,
@@ -606,6 +664,7 @@ function buildRouterBase(entity: Entity, ctx: EntityCodegenContext): string {
     `    @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)`,
     `    def delete_${slug}(item_id: int, db: Session = Depends(get_db)):`,
     `        service.delete(db, item_id)`,
+    ...reversePyRoutes(entity, ctx),
     ``,
     `    return router`,
     ``,
@@ -1009,6 +1068,11 @@ export function describeEntityDefaults(entity: Entity): string[] {
   for (const r of belongsToRels(entity)) {
     const req = r.required ? 'required=true' : 'required=false (default: optional)';
     lines.push(`${entity.name} belongs-to ${r.target}: ${fkColumnName(r)}, ${req}`);
+  }
+  // has-many (Day 25) — the reverse projection: a parent-side collection route over the
+  // child's existing FK. No schema change.
+  for (const r of hasManyRels(entity)) {
+    lines.push(`${entity.name} has-many ${r.target}: GET /api/${tableName(entity)}/{id}/${childTable(r)} (reverse of ${reverseFkColumn(entity)}, no schema change)`);
   }
   return lines;
 }

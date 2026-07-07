@@ -108,6 +108,54 @@ function belongsToRels(entity: Entity): Relationship[] {
   return entity.relationships.filter((r) => r.kind === 'belongs-to');
 }
 
+// has-many (Day 25) — the REVERSE projection of a belongs-to FK. NO schema change: the
+// child already carries `<parent>_id` (its scalar FK). has-many adds ONLY a parent-side
+// collection endpoint — a @GetMapping("/{id}/<children>") that queries the child table by
+// the existing FK via JdbcTemplate. Emission loops over hasManyRels, so has-many-free
+// entities are byte-identical. Child table + FK derived by the SAME convention belongs-to uses.
+
+/** The has-many relationships on an entity, in authored order (deterministic). */
+function hasManyRels(entity: Entity): Relationship[] {
+  return entity.relationships.filter((r) => r.kind === 'has-many');
+}
+
+/** The child table for a has-many, e.g. has-many Application -> applications. */
+function childTable(rel: Relationship): string {
+  return pluralize(snakeCase(rel.target));
+}
+
+/** The child's FK column back to THIS parent, e.g. parent Team -> team_id. */
+function reverseFkColumn(parent: Entity): string {
+  return `${snakeCase(parent.name)}_id`;
+}
+
+/**
+ * The reverse-collection @GetMapping methods for a parent's has-many rels (empty for a
+ * has-many-free entity — byte-identical). Owner-scoped when multi-user. Uses JdbcTemplate
+ * (a Spring Boot autoconfigured bean) to query the child table by the existing FK column;
+ * returns the rows as List<Map<String, Object>>.
+ */
+function reverseSpringMethods(entity: Entity, ctx: EntityCodegenContext): string[] {
+  const rels = hasManyRels(entity);
+  if (rels.length === 0) return [];
+  const fk = reverseFkColumn(entity);
+  const lines: string[] = [];
+  for (const r of rels) {
+    const ct = childTable(r);
+    const where = ctx.multiUser ? `${fk} = ? AND owner_id = ?` : `${fk} = ?`;
+    const args = ctx.multiUser ? `id, currentUser.requireCurrentUserId()` : `id`;
+    lines.push(
+      ``,
+      `    @GetMapping("/{id}/${ct}")`,
+      `    public List<Map<String, Object>> ${ct}(@PathVariable Long id) {`,
+      `        // has-many ${entity.name} -> ${r.target}: the parent's ${ct} (reverse of the ${fk} FK).`,
+      `        return jdbcTemplate.queryForList("SELECT * FROM ${ct} WHERE ${where} ORDER BY id", ${args});`,
+      `    }`,
+    );
+  }
+  return lines;
+}
+
 /** FK Java field name, e.g. Application -> applicationId. */
 function fkFieldName(rel: Relationship): string {
   return `${decapitalize(rel.target)}Id`;
@@ -617,6 +665,15 @@ function buildControllerBase(entity: Entity, ctx: EntityCodegenContext): string 
     ``,
     `import jakarta.validation.Valid;`,
     `import java.util.List;`,
+    // has-many (Day 25): the reverse endpoints return generic rows via JdbcTemplate (gated —
+    // a has-many-free entity imports nothing new, so it stays byte-identical).
+    ...(hasManyRels(entity).length > 0
+      ? [
+          `import java.util.Map;`,
+          `import org.springframework.jdbc.core.JdbcTemplate;`,
+          ...(ctx.multiUser ? [`import ${ctx.packageName}.common.CurrentUserProvider;`] : []),
+        ]
+      : []),
     `import org.springframework.beans.factory.annotation.Autowired;`,
     `import org.springframework.http.HttpStatus;`,
     `import org.springframework.web.bind.annotation.DeleteMapping;`,
@@ -639,6 +696,16 @@ function buildControllerBase(entity: Entity, ctx: EntityCodegenContext): string 
     `    @Autowired`,
     `    protected ${name}Service service;`,
     ``,
+    // has-many (Day 25): gated beans for the reverse-collection endpoints (JdbcTemplate is a
+    // Spring Boot autoconfigured bean; currentUser scopes the query when multi-user).
+    ...(hasManyRels(entity).length > 0
+      ? [
+          `    @Autowired`,
+          `    protected JdbcTemplate jdbcTemplate;`,
+          ``,
+          ...(ctx.multiUser ? [`    @Autowired`, `    protected CurrentUserProvider currentUser;`, ``] : []),
+        ]
+      : []),
     `    @GetMapping`,
     `    public List<${name}Dto> list() {`,
     `        return service.list().stream().map(${name}Dto::fromEntity).toList();`,
@@ -665,6 +732,7 @@ function buildControllerBase(entity: Entity, ctx: EntityCodegenContext): string 
     `    public void delete(@PathVariable Long id) {`,
     `        service.delete(id);`,
     `    }`,
+    ...reverseSpringMethods(entity, ctx),
     `}`,
     ``,
   ].join('\n');
@@ -794,6 +862,11 @@ export function describeEntityDefaults(entity: Entity): string[] {
   for (const r of belongsToRels(entity)) {
     const req = r.required ? 'required=true' : 'required=false (default: optional)';
     lines.push(`${entity.name} belongs-to ${r.target}: ${fkColumnName(r)}, ${req}`);
+  }
+  // has-many (Day 25) — the reverse projection: a parent-side collection endpoint over the
+  // child's existing FK. No schema change.
+  for (const r of hasManyRels(entity)) {
+    lines.push(`${entity.name} has-many ${r.target}: GET /api/${tableName(entity)}/{id}/${childTable(r)} (reverse of ${reverseFkColumn(entity)}, no schema change)`);
   }
   return lines;
 }

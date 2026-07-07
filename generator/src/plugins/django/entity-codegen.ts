@@ -133,6 +133,54 @@ function belongsToRels(entity: Entity): Relationship[] {
   return entity.relationships.filter((r) => r.kind === 'belongs-to');
 }
 
+// has-many (Day 25) — the REVERSE projection of a belongs-to FK. NO schema change: the
+// child already carries `<parent>_id` (its ForeignKey). has-many adds ONLY a parent-side
+// collection endpoint — a DRF @action(detail=True) that filters the child by the existing
+// FK. Emission loops over hasManyRels, so has-many-free entities are byte-identical. The
+// child model is reached via apps.get_model (no cross-import; related_name="+" is untouched).
+
+/** The has-many relationships on an entity, in authored order (deterministic). */
+function hasManyRels(entity: Entity): Relationship[] {
+  return entity.relationships.filter((r) => r.kind === 'has-many');
+}
+
+/** The child table for a has-many, e.g. has-many Application -> applications. */
+function childTable(rel: Relationship): string {
+  return pluralize(snakeCase(rel.target));
+}
+
+/** The child's FK column back to THIS parent, e.g. parent Team -> team_id. */
+function reverseFkColumn(parent: Entity): string {
+  return `${snakeCase(parent.name)}_id`;
+}
+
+/**
+ * The reverse-collection @action methods for a parent's has-many rels (empty for a
+ * has-many-free entity — byte-identical). detail=True gives GET /api/<parents>/{pk}/<children>/.
+ * The child is reached via apps.get_model (no import); filtered by the existing FK column,
+ * owner-scoped when multi-user; .values() returns dict rows.
+ */
+function reverseDjangoActions(entity: Entity, ctx: EntityCodegenContext): string[] {
+  const rels = hasManyRels(entity);
+  if (rels.length === 0) return [];
+  const fk = reverseFkColumn(entity);
+  const lines: string[] = [];
+  for (const r of rels) {
+    const ct = childTable(r);
+    const filter = ctx.multiUser ? `${fk}=pk, owner=request.user` : `${fk}=pk`;
+    lines.push(
+      ``,
+      `    @action(detail=True, url_path="${ct}")`,
+      `    def ${ct}(self, request, pk=None):`,
+      `        # has-many ${entity.name} -> ${r.target}: the parent's ${ct} (reverse of the ${fk} FK).`,
+      `        child = apps.get_model("${fkTargetApp(r)}", "${r.target}")`,
+      `        rows = child.objects.filter(${filter}).order_by("id").values()`,
+      `        return Response(list(rows))`,
+    );
+  }
+  return lines;
+}
+
 /** Django model field name for the FK, e.g. Application -> application. */
 function fkFieldName(rel: Relationship): string {
   return snakeCase(rel.target);
@@ -311,6 +359,9 @@ function buildViewsBase(entity: Entity, ctx: EntityCodegenContext): string {
       `in ${name}ViewSet, which extends this class.`,
       `"""`,
       `from rest_framework import viewsets`,
+      ...(hasManyRels(entity).length > 0
+        ? [`from rest_framework.decorators import action`, `from rest_framework.response import Response`, `from django.apps import apps`]
+        : []),
       ``,
       `from .models import ${name}`,
       `from .serializers import ${name}Serializer`,
@@ -324,6 +375,7 @@ function buildViewsBase(entity: Entity, ctx: EntityCodegenContext): string {
       ``,
       `    def perform_create(self, serializer):`,
       `        serializer.save(owner=self.request.user)`,
+      ...reverseDjangoActions(entity, ctx),
       ``,
     ].join('\n');
   }
@@ -334,6 +386,9 @@ function buildViewsBase(entity: Entity, ctx: EntityCodegenContext): string {
     `logic belongs in ${name}ViewSet, which extends this class.`,
     `"""`,
     `from rest_framework import viewsets`,
+    ...(hasManyRels(entity).length > 0
+      ? [`from rest_framework.decorators import action`, `from rest_framework.response import Response`, `from django.apps import apps`]
+      : []),
     ``,
     `from .models import ${name}`,
     `from .serializers import ${name}Serializer`,
@@ -342,6 +397,7 @@ function buildViewsBase(entity: Entity, ctx: EntityCodegenContext): string {
     `class ${name}ViewSetBase(viewsets.ModelViewSet):`,
     `    queryset = ${name}.objects.all().order_by("id")`,
     `    serializer_class = ${name}Serializer`,
+    ...reverseDjangoActions(entity, ctx),
     ``,
   ].join('\n');
 }
@@ -494,6 +550,11 @@ export function describeEntityDefaults(entity: Entity): string[] {
   for (const r of belongsToRels(entity)) {
     const req = r.required ? 'required=true' : 'required=false (default: optional)';
     lines.push(`${entity.name} belongs-to ${r.target}: ${fkColumnName(r)}, ${req}`);
+  }
+  // has-many (Day 25) — the reverse projection: a parent-side collection @action over the
+  // child's existing FK. No schema change.
+  for (const r of hasManyRels(entity)) {
+    lines.push(`${entity.name} has-many ${r.target}: GET /api/${tableName(entity)}/{id}/${childTable(r)}/ (reverse of ${reverseFkColumn(entity)}, no schema change)`);
   }
   return lines;
 }

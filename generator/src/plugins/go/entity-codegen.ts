@@ -155,6 +155,28 @@ function belongsToRels(entity: Entity): Relationship[] {
   return entity.relationships.filter((r) => r.kind === 'belongs-to');
 }
 
+// has-many (Day 25) — the REVERSE projection of a belongs-to FK. NO schema change:
+// the child already carries `<parent>_id`. has-many adds ONLY a parent-side collection
+// endpoint (GET /api/<parents>/{id}/<children>) querying the child table by the existing
+// FK column. Emission is a loop over hasManyRels, so has-many-free entities are byte-
+// identical (a literal bypass, exactly like belongs-to). Child table + FK derived by the
+// SAME convention belongs-to uses, so no child-side change is needed.
+
+/** The has-many relationships on an entity, in authored order (deterministic). */
+function hasManyRels(entity: Entity): Relationship[] {
+  return entity.relationships.filter((r) => r.kind === 'has-many');
+}
+
+/** The child table for a has-many, e.g. has-many Application -> applications. */
+function childTable(rel: Relationship): string {
+  return pluralize(snakeCase(rel.target));
+}
+
+/** The child's FK column back to THIS parent, e.g. parent Team -> team_id. */
+function reverseFkColumn(parent: Entity): string {
+  return `${snakeCase(parent.name)}_id`;
+}
+
 /** FK DB column, e.g. Application -> application_id. */
 function fkColumnName(rel: Relationship): string {
   return `${snakeCase(rel.target)}_id`;
@@ -544,6 +566,44 @@ function buildServiceBase(entity: Entity, ctx: EntityCodegenContext): string {
     `\treturn s.store.Delete(${deleteArgs})`,
     `}`,
     ``,
+    // has-many (Day 25): a generic reverse-collection query over the child table (empty
+    // for a has-many-free entity — byte-identical). It reuses the store's db handle; the
+    // child columns are unknown at codegen, so rows are returned as generic maps.
+    ...(hasManyRels(entity).length > 0
+      ? [
+          `// ReverseCollection runs a has-many reverse query (a parent's children) and`,
+          `// returns the rows as generic maps. Same db handle; reuses the existing FK column.`,
+          `func (s *${name}ServiceBase) ReverseCollection(query string, args ...interface{}) ([]map[string]interface{}, error) {`,
+          `\trows, err := s.store.db.Query(query, args...)`,
+          `\tif err != nil {`,
+          `\t\treturn nil, err`,
+          `\t}`,
+          `\tdefer rows.Close()`,
+          `\tcols, err := rows.Columns()`,
+          `\tif err != nil {`,
+          `\t\treturn nil, err`,
+          `\t}`,
+          `\tout := []map[string]interface{}{}`,
+          `\tfor rows.Next() {`,
+          `\t\tvals := make([]interface{}, len(cols))`,
+          `\t\tptrs := make([]interface{}, len(cols))`,
+          `\t\tfor i := range vals {`,
+          `\t\t\tptrs[i] = &vals[i]`,
+          `\t\t}`,
+          `\t\tif err := rows.Scan(ptrs...); err != nil {`,
+          `\t\t\treturn nil, err`,
+          `\t\t}`,
+          `\t\tm := map[string]interface{}{}`,
+          `\t\tfor i, c := range cols {`,
+          `\t\t\tm[c] = vals[i]`,
+          `\t\t}`,
+          `\t\tout = append(out, m)`,
+          `\t}`,
+          `\treturn out, rows.Err()`,
+          `}`,
+          ``,
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -561,6 +621,38 @@ function buildHandlerBase(entity: Entity, ctx: EntityCodegenContext): string {
   const deleteCall = mu ? `id, ${owner}` : 'id';
 
   const imports = [`\t"encoding/json"`, `\t"net/http"`, `\t"strconv"`, ...(mu ? [``, `\t"app/internal/auth"`] : []), `\t"app/internal/web"`];
+
+  // has-many (Day 25): the reverse-collection routes + handlers (empty for a has-many-free
+  // entity → byte-identical). Each queries the child table by the existing FK column,
+  // owner-scoped when multi-user. ph() picks the dialect placeholder ($N | ?), as the store does.
+  const ph = (i: number): string => (ctx.supportsReturning ? `$${i}` : '?');
+  const reverseRels = hasManyRels(entity);
+  const parentFk = reverseFkColumn(entity);
+  const reverseRoutes: string[] = reverseRels.map(
+    (r) => `\tmux.HandleFunc("GET /api/${table}/{id}/${childTable(r)}", h.reverse${pascalCase(r.target)})`,
+  );
+  const reverseHandlers: string[] = reverseRels.flatMap((r) => {
+    const ct = childTable(r);
+    const where = mu ? `${parentFk} = ${ph(1)} AND owner_id = ${ph(2)}` : `${parentFk} = ${ph(1)}`;
+    const args = mu ? `id, auth.UserID(r)` : `id`;
+    return [
+      `func (h *handler) reverse${pascalCase(r.target)}(w http.ResponseWriter, r *http.Request) {`,
+      `\tid, err := strconv.ParseInt(r.PathValue("id"), 10, 64)`,
+      `\tif err != nil {`,
+      `\t\tweb.WriteError(w, http.StatusBadRequest, "invalid id")`,
+      `\t\treturn`,
+      `\t}`,
+      `\t// has-many ${name} -> ${r.target}: the parent's ${ct} (reverse of the ${parentFk} FK).`,
+      `\titems, err := h.svc.ReverseCollection("SELECT * FROM ${ct} WHERE ${where} ORDER BY id", ${args})`,
+      `\tif err != nil {`,
+      `\t\tweb.WriteError(w, http.StatusInternalServerError, err.Error())`,
+      `\t\treturn`,
+      `\t}`,
+      `\tweb.WriteJSON(w, http.StatusOK, items)`,
+      `}`,
+      ``,
+    ];
+  });
 
   return [
     `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
@@ -581,6 +673,7 @@ function buildHandlerBase(entity: Entity, ctx: EntityCodegenContext): string {
     `\tmux.HandleFunc("POST /api/${table}", h.create)`,
     `\tmux.HandleFunc("PUT /api/${table}/{id}", h.update)`,
     `\tmux.HandleFunc("DELETE /api/${table}/{id}", h.remove)`,
+    ...reverseRoutes,
     `}`,
     ``,
     `func (h *handler) list(w http.ResponseWriter, r *http.Request) {`,
@@ -673,6 +766,7 @@ function buildHandlerBase(entity: Entity, ctx: EntityCodegenContext): string {
     `\tw.WriteHeader(http.StatusNoContent)`,
     `}`,
     ``,
+    ...reverseHandlers,
   ].join('\n');
 }
 
@@ -851,6 +945,11 @@ export function describeEntityDefaults(entity: Entity): string[] {
   for (const r of belongsToRels(entity)) {
     const req = r.required ? 'required=true' : 'required=false (default: optional)';
     lines.push(`${entity.name} belongs-to ${r.target}: ${fkColumnName(r)}, ${req}`);
+  }
+  // has-many (Day 25) — the reverse projection: a parent-side collection endpoint over the
+  // child's existing FK. No schema change.
+  for (const r of hasManyRels(entity)) {
+    lines.push(`${entity.name} has-many ${r.target}: GET /api/${tableName(entity)}/{id}/${childTable(r)} (reverse of ${reverseFkColumn(entity)}, no schema change)`);
   }
   return lines;
 }

@@ -669,7 +669,7 @@ async function main(): Promise<void> {
   // default (no has-many) is a literal bypass — no frozen fixture declares has-many, so
   // the 50 digests above are byte-identical. This records the additive has-many baselines
   // (EXPRESS this pass — the booted stack; the other 4 stacks are staged, see the report).
-  process.stdout.write('\n=== PART 1m: has-many reverse projection (Eco-Day 25 — Express) ===\n');
+  process.stdout.write('\n=== PART 1m: has-many reverse projection (Eco-Day 25 — 5 stacks × 2 DBs) ===\n');
   {
     // A has-many fixture: Team has-many Application; Application belongs-to Team (the FK on the child).
     const hm = (backend: string, database: string) => {
@@ -687,36 +687,54 @@ async function main(): Promise<void> {
       return m;
     };
 
-    // (a) additive baselines: Express × {PostgreSQL, MySQL}, twice-identical == recorded.
-    const EXPRESS_HM: Record<string, string> = {
-      PostgreSQL: '46662579ff6b0905e46c1d41e40ef7787921d7188146a9c78b6dfc4f90f137f8',
-      MySQL: '0daab037f5663e3abddab93e721a78d17adada5c652dd2801bb0f576f0f04c53',
+    // (a) additive baselines: ALL 5 STACKS × {PostgreSQL, MySQL}, twice-identical == recorded.
+    // Same query-based reverse accessor pattern per stack (pass 2 completed Go/Python/Django/Spring).
+    const HASMANY: Record<string, Record<string, string>> = {
+      Express: { PostgreSQL: '46662579ff6b0905e46c1d41e40ef7787921d7188146a9c78b6dfc4f90f137f8', MySQL: '0daab037f5663e3abddab93e721a78d17adada5c652dd2801bb0f576f0f04c53' },
+      Go: { PostgreSQL: '44576771c71cf31dc7e15d16be4c98f8bf30f4d8eaf783f58d261e3f4a3c687c', MySQL: '4b1ed9529290eae698c656d64adf4d087f9ea96fb1fe7b1e84e7a5da0dc89786' },
+      FastAPI: { PostgreSQL: '7ec9c914f34c72cb9905b82a299202c3e7f042789df471aea1fb12e1fc8bd1cc', MySQL: '29a0bdcee82c9d7471a5e913550e14f6fdfb9302457c33ed908f1785a2353ac8' },
+      Django: { PostgreSQL: 'e5d3984ebc5387f245098eed4bb70a7a51f3263efed5aad81f20f37fc86901d1', MySQL: 'b0aaae8fe10d648d45b0aaabc52809bff9b5ab773b3333b59c933ee16901343a' },
+      'Spring Boot': { PostgreSQL: '54cc1f022d3cb475148b3dac078000d92851be9cee8f531e05edc463ce9cc6a8', MySQL: '371a36124e674da55f41dae4eb11b8fb9068ef058dee8fc2bfa84aa6e03de00e' },
     };
-    for (const db of DATABASES) {
-      const a = hashFiles(await filesOf(hm('Express', db)));
-      const b = hashFiles(await filesOf(hm('Express', db)));
-      bake(`HASMANY|Express|${db}`, a);
-      record(a === b && a === EXPRESS_HM[db], `Express|${db} has-many twice-identical == recorded additive baseline`, a.slice(0, 16));
+    for (const backend of Object.keys(HASMANY)) {
+      for (const db of DATABASES) {
+        const a = hashFiles(await filesOf(hm(backend, db)));
+        const b = hashFiles(await filesOf(hm(backend, db)));
+        bake(`HASMANY|${backend}|${db}`, a);
+        record(a === b && a === HASMANY[backend][db], `${backend}|${db} has-many twice-identical == recorded additive baseline`, a.slice(0, 16));
+      }
     }
 
-    // (b) NO SCHEMA CHANGE: the migration files are byte-identical between has-many and the
-    // belongs-to-only twin — the FK already exists; has-many adds NO column/migration.
-    const hmFiles = await filesOf(hm('Express', 'PostgreSQL'));
-    const boMap = new Map((await filesOf(boOnly('Express', 'PostgreSQL'))).map((f) => [f.relPath, f.content]));
-    const migDiff = hmFiles.filter((f) => /migrations\//.test(f.relPath) && boMap.get(f.relPath) !== f.content).map((f) => f.relPath);
-    const changed = hmFiles.filter((f) => boMap.get(f.relPath) !== f.content).map((f) => f.relPath);
-    record(migDiff.length === 0, 'NO schema change: migrations byte-identical vs belongs-to-only (the FK already exists on the child)', `migDiff=[${migDiff.join(',')}]`);
-    record(changed.every((p) => p === 'src/entities/team/team.routes.base.js' || p === 'GENERATION-MANIFEST.txt'),
-      'has-many changes ONLY the parent-side accessor (router) + the ADR-004 manifest note — runnable child code untouched', `changed=[${changed.join(',')}]`);
+    // (b) NO SCHEMA CHANGE (all 5 stacks): vs the belongs-to-only twin, the ONLY files that
+    // differ are PARENT-side (route/controller/view/service) + the manifest — NEVER a
+    // migration/SQL/model (schema) file, and NEVER a file under the CHILD (application) dir.
+    // The FK already exists; has-many is a pure parent-side accessor.
+    for (const backend of Object.keys(HASMANY)) {
+      const hmFiles = await filesOf(hm(backend, 'PostgreSQL'));
+      const boMap = new Map((await filesOf(boOnly(backend, 'PostgreSQL'))).map((f) => [f.relPath, f.content]));
+      const changed = hmFiles.filter((f) => boMap.get(f.relPath) !== f.content).map((f) => f.relPath);
+      const schemaDiff = changed.filter((p) => /migration|\.sql$|models\.py$|__create/i.test(p));
+      const childDiff = changed.filter((p) => /(^|\/)application|\bApplication\b/i.test(p) && !/manifest/i.test(p));
+      record(schemaDiff.length === 0 && childDiff.length === 0,
+        `${backend}: NO schema change + child untouched — only the parent accessor + manifest differ`, `changed=[${changed.join(',')}]`);
+    }
 
-    // (c) the reverse route + the manifest note are present in the real output.
-    const routes = hmFiles.find((f) => /team\.routes\.base\.js$/.test(f.relPath))!.content;
-    const manifest = hmFiles.find((f) => f.relPath === 'GENERATION-MANIFEST.txt')!.content;
+    // (c) the reverse accessor + the manifest note are present in the real output (per stack).
+    const expFiles = await filesOf(hm('Express', 'PostgreSQL'));
+    const routes = expFiles.find((f) => /team\.routes\.base\.js$/.test(f.relPath))!.content;
+    const manifest = expFiles.find((f) => f.relPath === 'GENERATION-MANIFEST.txt')!.content;
+    const goHb = (await filesOf(hm('Go', 'PostgreSQL'))).find((f) => /team\/handler_base\.go$/.test(f.relPath))!.content;
+    const pyRt = (await filesOf(hm('FastAPI', 'PostgreSQL'))).find((f) => /team\/router_base\.py$/.test(f.relPath))!.content;
+    const djVw = (await filesOf(hm('Django', 'PostgreSQL'))).find((f) => /team\/views_base\.py$/.test(f.relPath))!.content;
+    const spCt = (await filesOf(hm('Spring Boot', 'PostgreSQL'))).find((f) => /TeamControllerBase\.java$/.test(f.relPath))!.content;
     const projOk =
-      /router\.get\('\/:id\/applications'/.test(routes) &&
-      /SELECT \* FROM applications WHERE team_id = \$1 AND owner_id = \$2 ORDER BY id/.test(routes) &&
-      /Team has-many Application: GET \/api\/teams\/:id\/applications/.test(manifest);
-    record(projOk, 'reverse accessor generated: GET /api/teams/:id/applications over the existing team_id FK (owner-scoped)');
+      /router\.get\('\/:id\/applications'/.test(routes) &&                                             // Express
+      /Team has-many Application: GET \/api\/teams\/:id\/applications/.test(manifest) &&
+      /mux\.HandleFunc\("GET \/api\/teams\/\{id\}\/applications"/.test(goHb) &&                          // Go
+      /@router\.get\("\/\{item_id\}\/applications"\)/.test(pyRt) &&                                      // FastAPI
+      /@action\(detail=True, url_path="applications"\)/.test(djVw) &&                                    // Django
+      /@GetMapping\("\/\{id\}\/applications"\)/.test(spCt);                                              // Spring
+    record(projOk, 'reverse accessor generated in all 5 stacks: GET /api/teams/:id/applications over the existing team_id FK');
 
     // (d) UI==CLI (Day 16 seam): a has-many declared through assembleBlueprint == the
     // programmatic createProjectModel+addEntity path, byte-identical (structural).
@@ -729,7 +747,7 @@ async function main(): Promise<void> {
     };
     const uiHash = hashFiles(await filesOf(assembleBlueprint(choices)));
     const cliHash = hashFiles(await filesOf(hm('Express', 'PostgreSQL')));
-    record(uiHash === cliHash && uiHash === EXPRESS_HM.PostgreSQL, 'UI==CLI for has-many: assembleBlueprint == programmatic path, byte-identical', uiHash.slice(0, 16));
+    record(uiHash === cliHash && uiHash === HASMANY.Express.PostgreSQL, 'UI==CLI for has-many: assembleBlueprint == programmatic path, byte-identical', uiHash.slice(0, 16));
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
