@@ -38,6 +38,8 @@ import { assembleBlueprint, type BlueprintChoices } from './core/assemble.js';
 import { canonicalStringify } from './core/canonical-json.js';
 import { requiredToolchains, parseVersion, compareToPin, buildReport, type ProbeResult } from './detect/detect-core.js';
 import { emptyContent, contentFillState, type SlotContent } from './core/slot-content.js';
+import { fillContextOf, buildFillSpecs, orchestrateFill, type SlotFiller } from './fill/fill-core.js';
+import { aiConfigFromEnv, aiFillerFromEnv } from './fill/fill-ai.js';
 import type { GeneratedFile } from './core/plugin.js';
 
 // ── The enumerated frozen-baseline set (43). Guard-the-guarded to source reports. ──
@@ -585,6 +587,79 @@ async function main(): Promise<void> {
       contentFillState(decls, full) === 'full';
     record(shellInvariant && fillStatesOk,
       'shell BYTE-IDENTICAL across empty/partial/full content (by construction — content never an argument to buildFileSet)');
+  }
+
+  // ══ PART 1l — creative slot FILL pure core (Eco-Day 23) ══════════════════════
+  // Day 23 adds the FIRST AI touchpoint — but the PURE fill core is AI-FREE: it builds fill
+  // SPECS from the blueprint + declarations and ORCHESTRATES an INJECTED filler into the
+  // separate SlotContent layer. Fixture-tested here with a FAKE deterministic filler (no AI,
+  // no network, no key) — the PART-1j analogue, CI-enforced. This asserts NOTHING about the
+  // shell: the 50 digests above already prove buildFileSet is byte-identical (fill has no
+  // write-path to generation — 0 refs). The LIVE AI edge (fill-ai.ts) is NOT exercised here.
+  process.stdout.write('\n=== PART 1l: creative slot fill pure core (Eco-Day 23) ===\n');
+  {
+    const decls = [
+      { id: 'hero.tagline', type: 'tagline' },
+      { id: 'app.overview', type: 'overview' },
+    ];
+    const state = buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }).getState();
+
+    // (a) fillContextOf/buildFillSpecs derive the right specs (one per slot, in order) purely.
+    const ctx = fillContextOf(state);
+    const specs = buildFillSpecs(decls, ctx);
+    const specsOk =
+      ctx.projectName === 'DemoApp' && ctx.backend === 'Express' && ctx.entities.includes('Ticket') &&
+      specs.length === 2 && specs[0].slotId === 'hero.tagline' && specs[0].type === 'tagline' &&
+      specs[1].slotId === 'app.overview' && specs[1].context.projectName === 'DemoApp';
+    record(specsOk, 'buildFillSpecs derives one spec per slot (id+type+project context) purely from the blueprint');
+
+    // (b) orchestrateFill over a FAKE deterministic filler → the expected SlotContent, keyed
+    // by slotId. Proves the core is deterministic GIVEN a deterministic filler (no AI here).
+    const fakeFiller: SlotFiller = async (s) => `FILL[${s.type}]:${s.context.projectName}`;
+    const c1 = await orchestrateFill(specs, fakeFiller);
+    const c2 = await orchestrateFill(specs, fakeFiller);
+    const orchOk =
+      JSON.stringify(c1) === JSON.stringify(c2) && // deterministic given the filler
+      c1['hero.tagline'].value === 'FILL[tagline]:DemoApp' &&
+      c1['app.overview'].value === 'FILL[overview]:DemoApp' &&
+      Object.keys(c1).length === 2; // writes ONLY the SlotContent keys — nothing else
+    record(orchOk, 'orchestrateFill(specs, fakeFiller) → expected SlotContent (deterministic given the filler; writes only content keys)');
+
+    // (c) graceful degradation (Law 21): a filler that throws / returns '' leaves that slot
+    // EMPTY — never a crash, never a partial. A failed/absent fill degrades to "unfilled".
+    const flakyFiller: SlotFiller = async (s) => { if (s.type === 'tagline') throw new Error('no key'); return ''; };
+    const cg = await orchestrateFill(specs, flakyFiller);
+    const gracefulOk =
+      cg['hero.tagline'].value === '' && cg['app.overview'].value === '' &&
+      contentFillState(decls, cg) === 'empty';
+    record(gracefulOk, 'a throwing/empty filler degrades to unfilled content (no crash — Law 21 creative path)');
+
+    // (d) DETERMINISM ≠ AI-OUTPUT: two DIFFERENT fillers (as a live AI would vary) produce
+    // DIFFERENT content — but the SHELL is byte-identical (content is not a buildFileSet input).
+    const varyA: SlotFiller = async () => 'Headline A';
+    const varyB: SlotFiller = async () => 'Headline B';
+    const cA = await orchestrateFill(specs, varyA);
+    const cB = await orchestrateFill(specs, varyB);
+    const withSlotsModel = () => { const m = buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }); m.setSlots(decls); return m; };
+    const shellA = hashFiles(await filesOf(withSlotsModel()));
+    const shellB = hashFiles(await filesOf(withSlotsModel()));
+    const dncOk =
+      cA['hero.tagline'].value !== cB['hero.tagline'].value && // content VARIES (creative, non-deterministic)
+      shellA === shellB;                                       // shell INVARIANT (deterministic, gated)
+    record(dncOk, 'determinism ≠ AI-output: varying fills change CONTENT but the shell is byte-identical (content outside the backstop)');
+
+    // (e) DEFAULT OFF is STRUCTURAL (network-free proof): no key ⇒ aiConfigFromEnv/
+    // aiFillerFromEnv return null ⇒ NO filler is constructed ⇒ NO call site exists. A key ⇒
+    // config with the developer's endpoint/model. We build the filler with a key but NEVER
+    // call it (no network in the harness) — the point is the call SITE only exists with a key.
+    const noKey = aiConfigFromEnv({} as NodeJS.ProcessEnv);
+    const withKey = aiConfigFromEnv({ THRAKSHA_AI_FILL_KEY: 'k' } as unknown as NodeJS.ProcessEnv);
+    const defaultOffOk =
+      noKey === null &&                                   // no key ⇒ no config ⇒ no call, ever
+      aiFillerFromEnv({} as NodeJS.ProcessEnv) === null && // no key ⇒ no filler constructed
+      withKey !== null && withKey.apiKey === 'k' &&        // key ⇒ the developer's config
+      typeof aiFillerFromEnv({ THRAKSHA_AI_FILL_KEY: 'k' } as unknown as NodeJS.ProcessEnv) === 'function';
+    record(defaultOffOk, 'DEFAULT OFF is structural: no key → no filler / no call site (a key → the developer’s config); Thraksha ships no key');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

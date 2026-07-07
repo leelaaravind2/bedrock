@@ -48,6 +48,7 @@ import { assembleBlueprint, type BlueprintChoices } from './core/assemble.js';
 import { applyProfile, fullOptionSet, type OrgProfile } from './core/org-profile.js';
 import { DEFAULT_VERSIONS } from './core/versions.js';
 import { runLiveDetection } from './detect/probe.js';
+import { fillViaEnv } from './fill/fill-ai.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)); // .../generator/dist
 const GENERATOR_DIR = path.join(HERE, '..');
@@ -262,6 +263,21 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   if (route === 'GET /api/detect') {
     const report = await runLiveDetection(requireModel().getState());
     sendJson(res, 200, report);
+    return;
+  }
+
+  // --- creative slot FILL (Day 23): the optional, detachable, developer-keyed AI fill ---
+  //     Generation ALWAYS runs first (the shell + empty slots — the Day-21 mechanism). This
+  //     opt-in POST-step asks the developer's OWN model (env key, read only by the impure
+  //     edge) to fill the SEPARATE SlotContent layer — it writes ONLY content, NEVER the
+  //     shell/structure/templates. DEFAULT OFF (structural): no THRAKSHA_AI_FILL_KEY ⇒ no
+  //     filler is built and NO AI call is made (enabled:false, empty content). Delete this
+  //     layer / unset the key ⇒ generation is unchanged (Law 21, creative path). The result
+  //     is SHOWN to the developer; it has no write-path back into the blueprint or output.
+  if (route === 'GET /api/fill-slots') {
+    const m = requireModel();
+    const attempt = await fillViaEnv(m.getState(), m.getSlots());
+    sendJson(res, 200, attempt);
     return;
   }
 
