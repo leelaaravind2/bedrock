@@ -23,6 +23,7 @@ import path from 'node:path';
 import type { ProjectModel } from './project-model.js';
 import type { BackendPlugin, GeneratedFile } from './plugin.js';
 import { activeIntegrationLines } from './integrations.js';
+import { renderSlotsSection } from './slots.js';
 
 // ---------------------------------------------------------------------------
 // The manifest (traceability, Law 12). Composed from agnostic model data plus
@@ -101,6 +102,21 @@ export async function buildFileSet(model: ProjectModel, plugin: BackendPlugin): 
           readme.content.slice(0, nl + 1) + '\n' + description + '\n' + readme.content.slice(nl + 1);
       }
     }
+  }
+
+  // 1b) Content SLOTS (Day 21). The STRUCTURAL half of the creative mechanism: a
+  //     clearly-marked, INERT markdown section of TYPED placeholders is APPENDED to the
+  //     README, one per DECLARED slot (via the type→component map + UnknownSection). This
+  //     is a NEUTRAL post-process (README is universal — Law 25 honoured, no per-stack
+  //     logic). NO slots declared ⇒ renderSlotsSection returns '' ⇒ a literal bypass: the
+  //     README — and the frozen backstop — stay byte-identical. Crucially, the placeholder
+  //     depends ONLY on the DECLARATION, never on slot CONTENT (which lives in the separate
+  //     slot-content.ts layer that buildFileSet never imports) — so the shell is byte-
+  //     identical across empty/partial/full content states BY CONSTRUCTION. No AI (ADR-001).
+  const slotsSection = renderSlotsSection(model.getSlots());
+  if (slotsSection) {
+    const readme = files.find((f) => f.relPath === 'README.md');
+    if (readme) readme.content = readme.content.replace(/\s*$/, '\n') + slotsSection;
   }
 
   // 2) One entity at a time, in model order (V-numbering etc. is the plugin's job).

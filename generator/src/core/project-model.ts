@@ -30,6 +30,7 @@
 import { type CodingStyle, defaultCodingStyle } from './style.js';
 import { type Integrations, defaultIntegrations } from './integrations.js';
 import { type StackVersions, defaultVersionsFor } from './versions.js';
+import { type SlotDecl } from './slots.js';
 
 // ---------------------------------------------------------------------------
 // Domain types — the Project Model shapes (per docs/INTAKE-SPEC.md).
@@ -174,6 +175,16 @@ export interface ProjectState {
    * only — "latest" is resolved to a pin BEFORE generation (resolve-then-pin).
    */
   versions: StackVersions;
+  /**
+   * The typed CONTENT-SLOT declarations (Day 21) — the STRUCTURAL half of the creative
+   * mechanism. Each is { id, type }: which creative slots this project declares, and each
+   * slot's TYPE (which selects its placeholder). Default [] (no slots) is a literal bypass:
+   * the README post-process inserts nothing, so the shell + the frozen backstop stay
+   * byte-identical. Declarations DRIVE the shell (a typed placeholder per slot); the slot
+   * CONTENT is a SEPARATE layer (slot-content.ts) the generation path never sees — so the
+   * shell is byte-identical across empty/partial/full content states BY CONSTRUCTION. No AI.
+   */
+  slots: SlotDecl[];
 }
 
 /** The Project Model API — the "map" the platform reads and updates. */
@@ -204,7 +215,11 @@ export interface ProjectModel {
   getVersions(): StackVersions;
   /** Set the pinned versions (must be CONCRETE — resolve "latest" before this). */
   setVersions(versions: StackVersions): void;
-  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions. */
+  /** The typed content-slot declarations (default [] — a literal bypass) — Day 21. */
+  getSlots(): SlotDecl[];
+  /** Set the slot declarations (a post-setup structural choice; default [] = bypass). */
+  setSlots(slots: SlotDecl[]): void;
+  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions + slots. */
   getState(): ProjectState;
 }
 
@@ -386,7 +401,8 @@ export function createProjectModel(settings: PhaseASettingsInput): ProjectModel 
   // Integrations default to none (a literal bypass); a post-setup choice supplied
   // via setIntegrations (like the coding style), so the wizard/CLI opt in later.
   // Description defaults to '' (a literal bypass) — supplied later via setDescription.
-  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions);
+  // Slots default to [] (a literal bypass) — declared later via setSlots (Day 21).
+  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions, []);
 }
 
 /**
@@ -402,14 +418,17 @@ function makeModel(
   initialIntegrations: Integrations,
   initialDescription: string,
   initialVersions: StackVersions,
+  initialSlots: SlotDecl[],
 ): ProjectModel {
   // Held in the closure like Phase-A/entities. Default is a no-op style / no
   // integrations / blank description — each a literal bypass. Versions default to
   // the current-implied pins (Day 11) — also a literal bypass (byte-identical output).
+  // Slots default to [] (Day 21) — a literal bypass (the README post-process is a no-op).
   let style: CodingStyle = initialStyle;
   let integrations: Integrations = initialIntegrations;
   let description: string = initialDescription;
   let versions: StackVersions = { ...initialVersions };
+  let slots: SlotDecl[] = initialSlots.map((s) => ({ id: s.id, type: s.type }));
   return {
     getPhaseASettings(): PhaseASettings {
       const copy: Record<string, unknown> = {};
@@ -508,6 +527,19 @@ function makeModel(
       versions = { ...next };
     },
 
+    getSlots(): SlotDecl[] {
+      // A copy (each decl too) so callers cannot mutate state. Declared order is
+      // preserved — it is part of the deterministic contract (slots render in order).
+      return slots.map((s) => ({ id: s.id, type: s.type }));
+    },
+
+    setSlots(next: SlotDecl[]): void {
+      // Structural declarations only ({ id, type }). Empty [] is the literal bypass.
+      // Slot CONTENT lives in the SEPARATE content layer — never here (never in the
+      // blueprint the shell reads), so the shell is content-invariant by construction.
+      slots = next.map((s) => ({ id: s.id, type: s.type }));
+    },
+
     getState(): ProjectState {
       return {
         phaseA: this.getPhaseASettings(),
@@ -517,6 +549,7 @@ function makeModel(
         integrations: this.getIntegrations(),
         description: this.getDescription(),
         versions: this.getVersions(),
+        slots: this.getSlots(),
       };
     },
   };
@@ -580,5 +613,11 @@ export function restoreProjectModel(state: ProjectSnapshot): ProjectModel {
     state.versions && Object.keys(state.versions).length > 0
       ? { ...state.versions }
       : defaultVersionsFor(phaseA.backend as string);
-  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions);
+  // Snapshots that predate slots (Day 21) have no `slots` — default to [] so those
+  // versions regenerate byte-for-byte (ADR-003). Declarations are structural; content
+  // is a separate layer and was never part of the snapshot.
+  const slots: SlotDecl[] = Array.isArray(state.slots)
+    ? state.slots.map((s) => ({ id: s.id, type: s.type }))
+    : [];
+  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions, slots);
 }

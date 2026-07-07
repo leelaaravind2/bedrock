@@ -43,6 +43,7 @@ import {
 import { type CodingStyle } from './style.js';
 import { type Integrations } from './integrations.js';
 import { type StackVersions, resolveVersions } from './versions.js';
+import { type SlotDecl } from './slots.js';
 
 /**
  * The canonical, JSON-serialisable choices the wizard collects and the CLI passes.
@@ -60,6 +61,8 @@ export interface BlueprintChoices {
   integrations?: Integrations;
   /** Optional project description (default '' — a bypass; README-only when provided). */
   description?: string;
+  /** Optional typed content-slot declarations (default [] — a bypass; Day 21). */
+  slots?: SlotDecl[];
   /** Entities in order (a belongs-to target must be defined earlier — the model checks). */
   entities?: EntitySpec[];
 }
@@ -89,6 +92,9 @@ export function assembleBlueprint(choices: BlueprintChoices): ProjectModel {
   if (choices.style) model.setStyle(choices.style);
   if (choices.integrations) model.setIntegrations(choices.integrations);
   if (typeof choices.description === 'string') model.setDescription(choices.description);
+  // Slots: declared only when supplied. Omitted / [] ⇒ no setSlots effect and the
+  // README post-process is a no-op — a literal bypass (byte-identical frozen output).
+  if (choices.slots && choices.slots.length > 0) model.setSlots(choices.slots);
 
   for (const spec of choices.entities ?? []) model.addEntity(spec);
 

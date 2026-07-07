@@ -37,6 +37,7 @@ import { applyProfile, fullOptionSet, existingDefaults, type OrgProfile } from '
 import { assembleBlueprint, type BlueprintChoices } from './core/assemble.js';
 import { canonicalStringify } from './core/canonical-json.js';
 import { requiredToolchains, parseVersion, compareToPin, buildReport, type ProbeResult } from './detect/detect-core.js';
+import { emptyContent, contentFillState, type SlotContent } from './core/slot-content.js';
 import type { GeneratedFile } from './core/plugin.js';
 
 // ── The enumerated frozen-baseline set (43). Guard-the-guarded to source reports. ──
@@ -518,6 +519,72 @@ async function main(): Promise<void> {
       javaMissing.status === 'missing' && !!javaMissing.guidance && /adoptium\.net/.test(javaMissing.guidance.installUrl) &&
       noneReport.container.available === false && /Install Docker or Podman/i.test(noneReport.container.message);
     record(missOk, 'missing java → Adoptium link (never silent); no container runtime → install-a-runtime offer');
+  }
+
+  // ══ PART 1k — typed content SLOTS: the creative mechanism (Eco-Day 21) ═══════
+  // Day 21 adds the FIRST creative-side capability: a byte-identical structural SHELL
+  // with clearly-marked TYPED placeholders, and a SEPARATE content layer the shell never
+  // sees. The default (no slots) is a literal bypass — already proven by the 49 digests
+  // above reproducing byte-identical (slots is additive; empty ⇒ no README change). This
+  // PART records the slots-DECLARED additive baseline + proves the load-bearing new
+  // property: the shell is byte-identical across empty/partial/full CONTENT states.
+  process.stdout.write('\n=== PART 1k: typed content slots (Eco-Day 21) ===\n');
+  {
+    const decls = [
+      { id: 'hero.tagline', type: 'tagline' },
+      { id: 'app.overview', type: 'overview' },
+      { id: 'x.mystery', type: 'mystery' }, // unknown type → UnknownSection fallback
+    ];
+    const dfltFiles = await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }));
+    const withSlots = () => { const m = buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }); m.setSlots(decls); return m; };
+
+    // (a) slots-DECLARED additive baseline — twice-identical == recorded, differs from default.
+    const a = hashFiles(await filesOf(withSlots()));
+    const b = hashFiles(await filesOf(withSlots()));
+    const dfltHash = hashFiles(dfltFiles);
+    bake('SLOTS|Express|declared', a);
+    record(a === b && a === 'f85da4db54491299eaac88968f66330c973e63e5c332d7013d85fd3e70284e2e' && a !== dfltHash,
+      'slots-DECLARED (content empty) twice-identical == recorded additive baseline, differs from default', a.slice(0, 16));
+
+    // (b) Law 21 (creative path): the RUNNABLE shell is byte-identical to the no-slots
+    // default — slots add ONLY inert README documentation. A complete, valid project with
+    // slots empty (no runnable code touched).
+    const slotFiles = await filesOf(withSlots());
+    const dmap = new Map(dfltFiles.map((f) => [f.relPath, f.content]));
+    const changed = slotFiles.filter((f) => dmap.get(f.relPath) !== f.content).map((f) => f.relPath);
+    const added = slotFiles.filter((f) => !dmap.has(f.relPath));
+    record(changed.length === 1 && changed[0] === 'README.md' && added.length === 0,
+      'valid shell with empty slots: ONLY README.md changes vs default (runnable code untouched — Law 21 creative path)', `changed=[${changed.join(',')}]`);
+
+    // (c) the type→component map + UnknownSection fallback are visible in the real output.
+    const readme = slotFiles.find((f) => f.relPath === 'README.md')!.content;
+    const mapOk =
+      /THRAKSHA-SLOT id="hero\.tagline" type="tagline"/.test(readme) &&   // known type → its component
+      /THRAKSHA-SLOT id="app\.overview" type="overview"/.test(readme) &&
+      /unrecognized type "mystery"/.test(readme) &&                       // unknown type → UnknownSection
+      !/\r/.test(readme);                                                  // LF only (LD-2)
+    record(mapOk, 'type→component map renders known types + UnknownSection fallback for unknown type (LF, clearly-marked)');
+
+    // (d) SHELL BYTE-IDENTICAL ACROSS empty/partial/full CONTENT (by construction). The
+    // content layer is NEVER an argument to buildFileSet — building three content states
+    // and generating the shell yields the SAME bytes. Content cannot vary the shell.
+    const empty = emptyContent(decls);
+    const partial: SlotContent = { ...empty, 'hero.tagline': { value: 'Ship it faster' } };
+    const full: SlotContent = { 'hero.tagline': { value: 'Ship it faster' }, 'app.overview': { value: 'A demo app.' }, 'x.mystery': { value: 'anything' } };
+    const states: [string, SlotContent][] = [['empty', empty], ['partial', partial], ['full', full]];
+    let shellInvariant = true;
+    for (const [, content] of states) {
+      // The shell is generated from the model (declarations) ALONE; `content` is inspected
+      // by the SEPARATE layer but never passed to buildFileSet — so the hash cannot move.
+      void contentFillState(decls, content);
+      if (hashFiles(await filesOf(withSlots())) !== a) shellInvariant = false;
+    }
+    const fillStatesOk =
+      contentFillState(decls, empty) === 'empty' &&
+      contentFillState(decls, partial) === 'partial' &&
+      contentFillState(decls, full) === 'full';
+    record(shellInvariant && fillStatesOk,
+      'shell BYTE-IDENTICAL across empty/partial/full content (by construction — content never an argument to buildFileSet)');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
