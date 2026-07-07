@@ -1079,6 +1079,137 @@ export function generateWorkerEntityFiles(
 }
 
 // ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36) — the same domain-reuse projection as the
+// workers: reuse model/repository/dto/service.base + the dev service.js BYTE-
+// IDENTICALLY, and swap ONLY the HTTP route/controller layer (controller.base/
+// routes.base/routes.js) for:
+//   - CLI:     <slug>.commands.js  — a command→handler slice over the domain service.
+//   - GraphQL: <slug>.resolvers.js — Query/Mutation resolvers over the domain service.
+// ---------------------------------------------------------------------------
+
+/** The GraphQL query/mutation field names for an entity — MUST match core/graphql-sdl.ts. */
+function graphqlNames(entity: Entity): { single: string; plural: string; Name: string } {
+  const single = decapitalize(entity.name);
+  return { single, plural: `${single}s`, Name: entity.name };
+}
+
+/** The CLI command slice for one entity — CRUD commands calling the domain service. */
+function buildCliCommands(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  return [
+    `'use strict';`,
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// CLI commands for ${name}: the command→handler slice calling the SAME domain`,
+    `// service the REST API used (${slug}.service.js). No HTTP route/controller — the`,
+    `// entrypoint (src/cli.js) dispatches "<entity> <op>" to these and runs to exit.`,
+    `const service = require('./${slug}.service');`,
+    `const { validate } = require('./${slug}.dto');`,
+    ``,
+    `// The system context this command runs under (no HTTP request).`,
+    `const ctx = ${workerCtxLiteral(ctx)};`,
+    ``,
+    `// One handler per CRUD op. Each receives the parsed args ({ _: [positional],`,
+    `// ...flags }), calls the domain service, and returns a JSON-serialisable result`,
+    `// (the entrypoint prints it). "get"/"update"/"delete" take the id as args._[0];`,
+    `// "create"/"update" take field flags as the body (validated by the shared dto).`,
+    `const commands = {`,
+    `  '${slug}:list': async () => service.list(ctx),`,
+    `  '${slug}:get': async (args) => service.get(ctx, Number(args._[0])),`,
+    `  '${slug}:create': async (args) => service.create(ctx, validate(args)),`,
+    `  '${slug}:update': async (args) => service.update(ctx, Number(args._[0]), validate(args)),`,
+    `  '${slug}:delete': async (args) => {`,
+    `    await service.remove(ctx, Number(args._[0]));`,
+    `    return { deleted: Number(args._[0]) };`,
+    `  },`,
+    `};`,
+    ``,
+    `module.exports = { commands };`,
+    ``,
+  ].join('\n');
+}
+
+/** The GraphQL resolver slice for one entity — Query/Mutation calling the domain service. */
+function buildGraphqlResolvers(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const { single, plural } = graphqlNames(entity);
+  return [
+    `'use strict';`,
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// GraphQL resolvers for ${name}: Query/Mutation fields calling the SAME domain`,
+    `// service the REST API used (${slug}.service.js). No HTTP route/controller — one`,
+    `// /graphql endpoint over schema.graphql merges these (src/resolvers.js).`,
+    `const service = require('./${slug}.service');`,
+    `const { validate } = require('./${slug}.dto');`,
+    ``,
+    `// The system context this resolver runs under (no HTTP request).`,
+    `const ctx = ${workerCtxLiteral(ctx)};`,
+    ``,
+    `// rootValue-style resolvers (graphql buildSchema): each field receives (args).`,
+    `const resolvers = {`,
+    `  Query: {`,
+    `    ${plural}: () => service.list(ctx),`,
+    `    ${single}: (args) => service.get(ctx, Number(args.id)),`,
+    `  },`,
+    `  Mutation: {`,
+    `    create${name}: (args) => service.create(ctx, validate(args.input)),`,
+    `    update${name}: (args) => service.update(ctx, Number(args.id), validate(args.input)),`,
+    `    delete${name}: async (args) => {`,
+    `      await service.remove(ctx, Number(args.id));`,
+    `      return true;`,
+    `    },`,
+    `  },`,
+    `};`,
+    ``,
+    `module.exports = { resolvers };`,
+    ``,
+  ].join('\n');
+}
+
+/** The shared domain file set (byte-identical to the api-only twin) for CLI/GraphQL. */
+function domainEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  const slug = entitySlug(entity);
+  const dir = `src/entities/${slug}`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+  return [
+    { relPath: `${dir}/${slug}.model.js`, content: buildModel(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.repository.js`, content: buildRepository(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.dto.js`, content: buildDto(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.service.base.js`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `migrations/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/${slug}.service.js`, content: buildServiceDev(entity), ownership: 'developer' },
+  ];
+}
+
+/**
+ * The CLI entity file set (Day 36): the domain layer BYTE-IDENTICAL to the api-only
+ * twin, MINUS the HTTP route/controller layer, PLUS <slug>.commands.js.
+ */
+export function generateCliEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f, ctx.sql);
+  const slug = entitySlug(entity);
+  return [
+    ...domainEntityFiles(entity, ctx),
+    { relPath: `src/entities/${slug}/${slug}.commands.js`, content: buildCliCommands(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+/**
+ * The GraphQL entity file set (Day 36): the domain layer BYTE-IDENTICAL to the
+ * api-only twin, MINUS the HTTP route/controller layer, PLUS <slug>.resolvers.js.
+ */
+export function generateGraphqlEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f, ctx.sql);
+  const slug = entitySlug(entity);
+  return [
+    ...domainEntityFiles(entity, ctx),
+    { relPath: `src/entities/${slug}/${slug}.resolvers.js`, content: buildGraphqlResolvers(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Public API.
 // ---------------------------------------------------------------------------
 

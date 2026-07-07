@@ -37,6 +37,22 @@ import { type DesignTokens } from '../figma/figma-ingest.js';
 // Domain types — the Project Model shapes (per docs/INTAKE-SPEC.md).
 // ---------------------------------------------------------------------------
 
+/**
+ * The project types that have NO frontend (the type↔frontend constraint, Day 15
+ * → 34 → 36). Membership is the SINGLE source of truth for "force frontend =
+ * None": API-only + the worker/backend archetypes. 'Web App' and 'Static Site +
+ * API' are ABSENT — they keep their chosen frontend. Keeping this an explicit set
+ * (rather than a `!== 'Web App'` test) is what lets 'Static Site + API' retain a
+ * frontend while staying byte-neutral for the existing frontendless types.
+ */
+export const FRONTENDLESS_PROJECT_TYPES: ReadonlySet<string> = new Set([
+  'API-only',
+  'Cron Worker',
+  'Queue Consumer',
+  'CLI',
+  'GraphQL API',
+]);
+
 /** Phase-A settings — the foundational, up-front project decisions. */
 export interface PhaseASettings {
   /** Q1 Mandatory — free text. */
@@ -46,14 +62,20 @@ export interface PhaseASettings {
    * full project); 'API-only' is a backend with no frontend (Day 15). Day 34
    * adds two worker archetypes — 'Cron Worker' (a scheduler + an idempotent
    * handler, no HTTP routes) and 'Queue Consumer' (a broker + a consume loop +
-   * a topic→handler table). The type is the higher-level concept that constrains
-   * the lower answers — every non-'Web App' type implies no frontend (enforced
-   * in createProjectModel). Keep 'Web App' the EXACT string it has always been:
-   * it is the literal bypass that freezes the 20-hash matrix (its manifest line
-   * stays byte-identical). The worker types are ADDITIVE — no fixture uses them,
-   * so the frozen backstop reproduces byte-for-byte (Day-34 default-bypass).
+   * a topic→handler table). Day 36 adds three more — 'CLI' (an arg-parse
+   * entrypoint + a command→handler table, run-to-exit, no HTTP), 'GraphQL API'
+   * (one /graphql endpoint + a deterministic SDL schema + resolvers, replacing
+   * the REST route/controller layer), and 'Static Site + API' (web-app + an
+   * additive static-build stage — the ONLY new type that KEEPS a frontend). The
+   * type is the higher-level concept that constrains the lower answers — the
+   * FRONTENDLESS types (API-only, Cron Worker, Queue Consumer, CLI, GraphQL API)
+   * imply no frontend; Web App and Static Site + API keep the chosen frontend
+   * (enforced in createProjectModel). Keep 'Web App' the EXACT string it has
+   * always been: it is the literal bypass that freezes the 20-hash matrix (its
+   * manifest line stays byte-identical). Every non-Web-App type is ADDITIVE — no
+   * fixture uses them, so the frozen backstop reproduces byte-for-byte.
    */
-  projectType: 'Web App' | 'API-only' | 'Cron Worker' | 'Queue Consumer';
+  projectType: 'Web App' | 'API-only' | 'Cron Worker' | 'Queue Consumer' | 'CLI' | 'GraphQL API' | 'Static Site + API';
   /**
    * Q3-Q5 Mandatory — the chosen technologies, recorded as the developer's
    * intent (Law 1). The kernel stores these names but NEVER acts on them with
@@ -411,16 +433,19 @@ export function createProjectModel(settings: PhaseASettingsInput): ProjectModel 
     }
   }
 
-  // The type↔frontend constraint (Day 15, generalized Day 34): a non-'Web App'
-  // project has no frontend. This is a GENERIC project-shape rule (not
+  // The type↔frontend constraint (Day 15; generalized Day 34; refined Day 36): the
+  // FRONTENDLESS types have no frontend. This is a GENERIC project-shape rule (not
   // per-technology), so it is Law-25 legal in the kernel, exactly like the
   // multiUser/auth normalisation above. It is recorded in defaultsApplied so it is
-  // shown, never silent (ADR-004). Web-App leaves frontend as chosen (React or
-  // None), so the 20 Web-App hashes are untouched. API-only, Cron Worker, and
-  // Queue Consumer (each a new output, no frozen hash) are frontendless. The
-  // API-only reason string is preserved BYTE-IDENTICAL so its Day-15 baseline does
-  // not move; the worker types name themselves in their own (new) reason.
-  if (phaseA.projectType !== 'Web App' && phaseA.frontend !== 'None') {
+  // shown, never silent (ADR-004). Day 36 REFINES the Day-34 `!== 'Web App'` rule
+  // into an explicit FRONTENDLESS set: 'Static Site + API' is web-app + a static
+  // build stage, so it KEEPS its frontend (like Web App) — a plain `!== 'Web App'`
+  // test would wrongly strip it. This refactor is BYTE-NEUTRAL for existing types:
+  // API-only / Cron Worker / Queue Consumer remain frontendless (same forced-None,
+  // same reason strings preserved byte-identical); Web App is untouched; Static
+  // Site + API (new, no fixture) keeps its frontend. CLI / GraphQL API are
+  // frontendless (backend archetypes). See FRONTENDLESS_PROJECT_TYPES below.
+  if (FRONTENDLESS_PROJECT_TYPES.has(phaseA.projectType as string) && phaseA.frontend !== 'None') {
     phaseA.frontend = 'None';
     defaultsApplied.push({
       setting: 'frontend',

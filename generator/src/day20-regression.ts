@@ -40,6 +40,7 @@ import { requiredToolchains, parseVersion, compareToPin, buildReport, type Probe
 import { emptyContent, contentFillState, type SlotContent } from './core/slot-content.js';
 import { fillContextOf, buildFillSpecs, orchestrateFill, type SlotFiller } from './fill/fill-core.js';
 import { ingestDesignTokens, canonicalTokens, figmaEligibility } from './figma/figma-ingest.js';
+import { buildCanonicalSdl } from './core/graphql-sdl.js';
 import { aiConfigFromEnv, aiFillerFromEnv } from './fill/fill-ai.js';
 import type { GeneratedFile } from './core/plugin.js';
 
@@ -1081,6 +1082,87 @@ async function main(): Promise<void> {
         `${backend.padEnd(11)} ${pt.padEnd(14)} DOMAIN-REUSE: domain byte-identical to api-only twin; only entrypoint+route/handler swapped`,
         `(-${removed.length} +${added.length})`);
     }
+  }
+
+  // ══ PART 1r — CLI + GraphQL + static-site+API project types (Eco-Day 36) ═════
+  // Three new archetypes: CLI (command→handler table) + GraphQL (one endpoint + a
+  // DETERMINISTIC SDL + resolvers) + Static Site + API (web-app + a static build
+  // stage, frontend KEPT). Express CLI+GraphQL are boot-verified (see the day36 boot
+  // driver); Spring static+API + the other stacks' CLI/GraphQL are generation-only /
+  // staged (pass 2) — honest per §4. The GraphQL SDL ordering is the load-bearing gate.
+  process.stdout.write('\n=== PART 1r: CLI + GraphQL + static-site+API (Eco-Day 36) ===\n');
+  {
+    const CLI = '553b797e7a8a8a0936f90a72959485e280abd65d94adb6c321a1e47b4ad087fb';
+    const GRAPHQL = '5b3cd7ecb941e20c3730d0a27de44800a49b4d5e7d99aa56a6b690e598f2185f';
+    const STATIC = '0062805b100bb7938241a610d9fffee8ce1594fb359911b11eb57f8560453477';
+    const REWRITTEN = new Set(['GENERATION-MANIFEST.txt', 'package.json', 'README.md']);
+    const apiTwin = toMap(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'API-only' })));
+
+    // (a) Express CLI — twice-identical + domain-reuse (only entrypoint + command layer swapped).
+    {
+      const a = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'CLI' })));
+      const b = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'CLI' })));
+      bake('day36|Express|CLI', a);
+      const cli = toMap(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'CLI' })));
+      let domainId = true;
+      for (const [p, c] of apiTwin) if (cli.has(p) && !REWRITTEN.has(p) && cli.get(p) !== c) domainId = false;
+      const added = [...cli.keys()].filter((p) => !apiTwin.has(p));
+      const cliShape = cli.has('src/cli.js') && cli.has('src/commands.js') && added.some((p) => p.endsWith('.commands.js'));
+      record(a === b && a === CLI && domainId && cliShape, 'Express CLI twice-identical == baseline; domain byte-identical to api-only twin; command layer swapped', a.slice(0, 16));
+    }
+
+    // (b) Express GraphQL — twice-identical + domain-reuse + DETERMINISTIC SDL ordering.
+    {
+      const a = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'GraphQL API' })));
+      const b = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'GraphQL API' })));
+      bake('day36|Express|GraphQL API', a);
+      const gql = toMap(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'GraphQL API' })));
+      let domainId = true;
+      for (const [p, c] of apiTwin) if (gql.has(p) && !REWRITTEN.has(p) && gql.get(p) !== c) domainId = false;
+      const gqlShape = gql.has('schema.graphql') && gql.has('src/graphql-server.js') && gql.has('src/resolvers.js') && [...gql.keys()].some((p) => p.endsWith('.resolvers.js'));
+      record(a === b && a === GRAPHQL && domainId && gqlShape, 'Express GraphQL twice-identical == baseline; domain byte-identical to api-only twin; REST layer → one schema+resolvers', a.slice(0, 16));
+
+      // The load-bearing SDL-determinism property: the SDL is a SORTED projection —
+      // reversed entity insertion order yields a BYTE-IDENTICAL schema (never iteration order).
+      const ents = [
+        { name: 'Zebra', fields: [{ name: 'name', type: 'String', required: true }] },
+        { name: 'Apple', fields: [{ name: 'title', type: 'String', required: true }, { name: 'qty', type: 'Integer' }] },
+      ];
+      const mk = (rev: boolean): ProjectModel => {
+        const m = createProjectModel({ projectName: 'X', projectType: 'GraphQL API', backend: 'Express', frontend: 'None', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' });
+        for (const e of rev ? [...ents].reverse() : ents) m.addEntity(e);
+        return m;
+      };
+      const sFwd = buildCanonicalSdl(mk(false).getEntities(), { multiUser: true, naming: 'default' });
+      const sRev = buildCanonicalSdl(mk(true).getEntities(), { multiUser: true, naming: 'default' });
+      const sortedTypes = sFwd.indexOf('type Apple') > 0 && sFwd.indexOf('type Apple') < sFwd.indexOf('type Zebra');
+      record(sFwd === sRev && sortedTypes, 'GraphQL SDL DETERMINISM: byte-identical under reversed insertion order (sorted by name, never iteration order)');
+    }
+
+    // (c) Spring static-site+API — twice-identical + domain-reuse vs WEB-APP twin (frontend KEPT; only a build stage added).
+    {
+      const a = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Spring Boot', database: 'PostgreSQL', projectType: 'Static Site + API' })));
+      const b = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Spring Boot', database: 'PostgreSQL', projectType: 'Static Site + API' })));
+      bake('day36|Spring Boot|Static Site + API', a);
+      const web = toMap(await filesOf(buildDemoAppModel({ backend: 'Spring Boot', database: 'PostgreSQL', projectType: 'Web App' })));
+      const st = toMap(await filesOf(buildDemoAppModel({ backend: 'Spring Boot', database: 'PostgreSQL', projectType: 'Static Site + API' })));
+      let domainId = true;
+      for (const [p, c] of web) if (st.has(p) && !REWRITTEN.has(p) && st.get(p) !== c) domainId = false;
+      const added = [...st.keys()].filter((p) => !web.has(p)).sort();
+      const frontendKept = [...st.keys()].some((p) => p.startsWith('frontend/'));
+      const onlyBuildStage = added.length === 1 && added[0] === 'static-build.sh';
+      record(a === b && a === STATIC && domainId && frontendKept && onlyBuildStage, 'Spring static-site+API twice-identical == baseline; web-app byte-identical + frontend KEPT + only static-build.sh added', a.slice(0, 16));
+    }
+
+    // (d) The frontend-constraint refinement: CLI/GraphQL are frontendless (frontend None);
+    //     Static Site + API KEEPS its frontend (the Day-36 split; byte-neutral for existing types).
+    const cliManifest = (await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'CLI' }))).find((f) => f.relPath === 'GENERATION-MANIFEST.txt')?.content ?? '';
+    const gqlManifest = (await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL', projectType: 'GraphQL API' }))).find((f) => f.relPath === 'GENERATION-MANIFEST.txt')?.content ?? '';
+    const stManifest = (await filesOf(buildDemoAppModel({ backend: 'Spring Boot', database: 'PostgreSQL', projectType: 'Static Site + API' }))).find((f) => f.relPath === 'GENERATION-MANIFEST.txt')?.content ?? '';
+    const cliFrontendless = /projectType: CLI/.test(cliManifest) && /frontend: None/.test(cliManifest) && /CLI projects have no frontend/.test(cliManifest);
+    const gqlFrontendless = /projectType: GraphQL API/.test(gqlManifest) && /frontend: None/.test(gqlManifest) && /GraphQL API projects have no frontend/.test(gqlManifest);
+    const staticKeepsFrontend = /projectType: Static Site \+ API/.test(stManifest) && /frontend: React/.test(stManifest);
+    record(cliFrontendless && gqlFrontendless && staticKeepsFrontend, 'frontend-constraint refinement: CLI/GraphQL → frontend None; Static Site + API → frontend React (kept)');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

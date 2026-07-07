@@ -208,6 +208,49 @@ function addWorkerReadmeSpring(raw: string, kind: 'cron' | 'queue'): string {
   return raw.trimEnd() + '\n' + lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// static-site+API archetype (Day 36). UNLIKE the entrypoint-swap archetypes, this
+// is an ADDITIVE build stage on top of the web-app projection: the frontend is KEPT
+// (Static Site + API is NOT in the frontendless set), and a deterministic static-
+// build script is added that renders the React frontend to static assets
+// (frontend/dist) servable by any static host / CDN, alongside the Spring API.
+// Spring is the only stack that scaffolds a frontend, so this archetype is
+// Spring-centric; generation-only here (no JDK / node build to run it).
+// ---------------------------------------------------------------------------
+
+/** The static-output build stage — renders the React frontend to static assets (deterministic). */
+const STATIC_BUILD_SH = [
+  `#!/usr/bin/env sh`,
+  `# __PROJECT_NAME__ — Static Site + API: the static-output build stage.`,
+  `#`,
+  `# Renders the React frontend to static assets (frontend/dist via \`vite build\`) that`,
+  `# any static host or CDN can serve, alongside the Spring Boot API (which runs`,
+  `# separately). Deterministic: dependency versions are pinned by frontend/package-lock`,
+  `# (\`npm ci\`). Run in CI or before deploy.`,
+  `set -e`,
+  `cd frontend`,
+  `npm ci`,
+  `npm run build   # vite build -> frontend/dist (static assets)`,
+  `echo "Static site built to frontend/dist — deploy it to any static host; the API runs separately."`,
+  ``,
+].join('\n');
+
+/** Append a truthful Static Site + API section to the Spring README. */
+function addStaticSiteReadme(raw: string): string {
+  return raw.trimEnd() + '\n' + [
+    ``,
+    `## Static Site + API (project type: Static Site + API)`,
+    ``,
+    `This project is the full web-app (Spring Boot API + React frontend) PLUS a`,
+    `**static-output build stage**: \`static-build.sh\` runs \`vite build\` to render the`,
+    `frontend into \`frontend/dist\` — a set of static assets any static host or CDN can`,
+    `serve. The API runs separately (\`docker compose up --build\`), and the static site`,
+    `talks to it. The frontend is retained (this type keeps its frontend, unlike the`,
+    `API-only / worker / CLI / GraphQL types). Nothing in the API or domain changes.`,
+    ``,
+  ].join('\n');
+}
+
 export interface SpringPluginOptions {
   /**
    * Absolute path to this plugin's template shell directory. Optional — when
@@ -244,6 +287,10 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
       const projectType = model.getPhaseASettings().projectType;
       const workerKind: 'cron' | 'queue' | null =
         projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
+      // Day 36: 'Static Site + API' is the web-app projection (frontend KEPT — apiOnly
+      // is false) + an ADDITIVE static-output build stage. It swaps nothing; it adds a
+      // static-build script + a README note. A LITERAL BYPASS otherwise.
+      const staticSite = projectType === 'Static Site + API';
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
@@ -256,9 +303,16 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
           else if (workerKind === 'queue' && relRaw === 'backend/pom.xml') raw = addAmqpStarter(raw);
           else if (relRaw === 'README.md') raw = addWorkerReadmeSpring(raw, workerKind);
         }
+        if (staticSite && relRaw === 'README.md') raw = addStaticSiteReadme(raw);
         const relOut = applyTokens(relRaw, tokens);
         const content = applyTokens(raw, tokens);
         files.push({ relPath: relOut, content, ownership: 'thraksha' });
+      }
+      if (staticSite) {
+        // The additive static-output build stage: a deterministic build script that
+        // renders the React frontend to static assets (frontend/dist) any static host
+        // can serve, alongside the Spring API. Frontend + API are both retained.
+        files.push({ relPath: 'static-build.sh', content: applyTokens(STATIC_BUILD_SH, tokens), ownership: 'thraksha' });
       }
       return files;
     },

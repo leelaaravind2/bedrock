@@ -24,9 +24,12 @@ import {
   generateEntityFiles,
   generateSimpleEntityFiles,
   generateWorkerEntityFiles,
+  generateCliEntityFiles,
+  generateGraphqlEntityFiles,
   describeEntityDefaults as describeExpressEntityDefaults,
   type EntityCodegenContext,
 } from './entity-codegen.js';
+import { buildCanonicalSdl } from '../../core/graphql-sdl.js';
 
 // This file compiles to dist/plugins/express/express-plugin.js; its templates
 // live at generator/plugins/express/templates (three levels up from dist/), so
@@ -644,6 +647,231 @@ function addWorkerReadme(raw: string, kind: 'cron' | 'queue'): string {
   return raw.trimEnd() + '\n' + lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36). Both are ENTRYPOINT/ROUTE-TABLE projections
+// reusing the domain layer and swapping the HTTP entrypoint (server.js/app.js) for:
+//   - CLI:     src/cli.js (stdlib arg-parse + dispatch, run-to-exit) + src/commands.js
+//              (the command→handler table). NO dependency (process.argv).
+//   - GraphQL: src/graphql-server.js (ONE /graphql endpoint) + src/resolvers.js (the
+//              merged resolver table) + schema.graphql (the deterministic SDL). The
+//              `graphql` runtime is a GATED generated-project dep (Thraksha core deps {}).
+// A LITERAL BYPASS for the other types. Deterministic string templates; no AI.
+// ---------------------------------------------------------------------------
+
+/** CLI entrypoint (src/cli.js): stdlib arg-parse + dispatch + run-to-exit (no dep). */
+const CLI_ENTRYPOINT_JS = [
+  `'use strict';`,
+  ``,
+  `// Entry point (CLI): parse "node src/cli.js <entity> <op> [--field value ...]",`,
+  `// dispatch to the entity command handler, print the JSON result, and exit. Stdlib`,
+  `// arg-parse (process.argv) — NO dependency. Runs to exit (no HTTP, no loop).`,
+  `const migrate = require('./migrate');`,
+  `const seed = require('./seed');`,
+  `const { commands } = require('./commands');`,
+  ``,
+  `// Parse argv into { _: [positional], ...flags }. Supports --key value, --key=value,`,
+  `// and boolean --flag. Deterministic, stdlib only.`,
+  `function parseArgs(argv) {`,
+  `  const out = { _: [] };`,
+  `  for (let i = 0; i < argv.length; i++) {`,
+  `    const a = argv[i];`,
+  `    if (a.startsWith('--')) {`,
+  `      const eq = a.indexOf('=');`,
+  `      if (eq !== -1) {`,
+  `        out[a.slice(2, eq)] = a.slice(eq + 1);`,
+  `      } else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) {`,
+  `        out[a.slice(2)] = argv[++i];`,
+  `      } else {`,
+  `        out[a.slice(2)] = true;`,
+  `      }`,
+  `    } else {`,
+  `      out._.push(a);`,
+  `    }`,
+  `  }`,
+  `  return out;`,
+  `}`,
+  ``,
+  `async function main() {`,
+  `  const [entity, op, ...rest] = process.argv.slice(2);`,
+  `  if (!entity || !op) {`,
+  `    console.error('usage: node src/cli.js <entity> <list|get|create|update|delete> [--field value ...]');`,
+  `    process.exit(2);`,
+  `  }`,
+  `  const key = entity + ':' + op;`,
+  `  const handler = commands[key];`,
+  `  if (!handler) {`,
+  `    console.error('unknown command: ' + key);`,
+  `    process.exit(2);`,
+  `  }`,
+  `  await migrate();`,
+  `  await seed();`,
+  `  const result = await handler(parseArgs(rest));`,
+  `  console.log(JSON.stringify(result, null, 2));`,
+  `}`,
+  ``,
+  `main().catch((err) => {`,
+  `  console.error('Error:', err && err.message ? err.message : err);`,
+  `  process.exit(1);`,
+  `});`,
+  ``,
+].join('\n');
+
+/** CLI command table (src/commands.js): auto-discovers per-entity command modules. */
+const CLI_COMMANDS_JS = [
+  `'use strict';`,
+  ``,
+  `// The command table (the CLI analog of app.js's router auto-mount): every`,
+  `// src/entities/<name>/<name>.commands.js is discovered and its commands merged`,
+  `// (sorted, deterministic). Keys are "<entity>:<op>".`,
+  `const fs = require('fs');`,
+  `const path = require('path');`,
+  ``,
+  `function loadCommands() {`,
+  `  const merged = {};`,
+  `  const entitiesDir = path.join(__dirname, 'entities');`,
+  `  if (fs.existsSync(entitiesDir)) {`,
+  `    for (const name of fs.readdirSync(entitiesDir).sort()) {`,
+  `      const file = path.join(entitiesDir, name, name + '.commands.js');`,
+  `      if (fs.existsSync(file)) {`,
+  `        const mod = require(file);`,
+  `        for (const key of Object.keys(mod.commands).sort()) merged[key] = mod.commands[key];`,
+  `      }`,
+  `    }`,
+  `  }`,
+  `  return merged;`,
+  `}`,
+  ``,
+  `const commands = loadCommands();`,
+  ``,
+  `module.exports = { commands, loadCommands };`,
+  ``,
+].join('\n');
+
+/** GraphQL entrypoint (src/graphql-server.js): ONE /graphql endpoint over the SDL + resolvers. */
+const GRAPHQL_SERVER_JS = [
+  `'use strict';`,
+  ``,
+  `// Entry point (GraphQL API): migrate → seed → serve ONE POST /graphql endpoint`,
+  `// over the deterministic SDL schema (schema.graphql) + the merged resolvers. Reuses`,
+  `// the domain layer; there are NO REST route/controller files. Uses the \`graphql\``,
+  `// reference runtime (a gated project dependency) over Express (already present).`,
+  `const fs = require('fs');`,
+  `const path = require('path');`,
+  `const express = require('express');`,
+  `const { buildSchema, graphql } = require('graphql');`,
+  `const migrate = require('./migrate');`,
+  `const seed = require('./seed');`,
+  `const { loadResolvers } = require('./resolvers');`,
+  ``,
+  `const PORT = Number(process.env.PORT || 8080);`,
+  `const sdl = fs.readFileSync(path.join(__dirname, '..', 'schema.graphql'), 'utf8');`,
+  `const schema = buildSchema(sdl);`,
+  `const merged = loadResolvers();`,
+  `// rootValue = the flat top-level field map (query + mutation fields are distinct).`,
+  `const rootValue = Object.assign({}, merged.Query, merged.Mutation);`,
+  ``,
+  `const app = express();`,
+  `app.use(express.json());`,
+  ``,
+  `// The single GraphQL endpoint. Public health stays for parity with the REST shell.`,
+  `app.get('/api/health', (req, res) => {`,
+  `  res.json({ status: 'ok', app: '__PROJECT_NAME__' });`,
+  `});`,
+  `app.post('/graphql', async (req, res) => {`,
+  `  const body = req.body || {};`,
+  `  const result = await graphql({ schema, source: body.query, rootValue, variableValues: body.variables });`,
+  `  res.json(result);`,
+  `});`,
+  ``,
+  `async function start() {`,
+  `  await migrate();`,
+  `  await seed();`,
+  `  app.listen(PORT, () => console.log('__PROJECT_NAME__ GraphQL API listening on port ' + PORT + ' (POST /graphql)'));`,
+  `}`,
+  ``,
+  `start().catch((err) => {`,
+  `  console.error('Failed to start:', err);`,
+  `  process.exit(1);`,
+  `});`,
+  ``,
+].join('\n');
+
+/** GraphQL resolver table (src/resolvers.js): auto-discovers + merges per-entity resolvers. */
+const GRAPHQL_RESOLVERS_JS = [
+  `'use strict';`,
+  ``,
+  `// The resolver map (the GraphQL analog of app.js's router auto-mount): every`,
+  `// src/entities/<name>/<name>.resolvers.js is discovered and its Query/Mutation`,
+  `// resolvers merged (sorted, deterministic).`,
+  `const fs = require('fs');`,
+  `const path = require('path');`,
+  ``,
+  `function loadResolvers() {`,
+  `  const merged = { Query: {}, Mutation: {} };`,
+  `  const entitiesDir = path.join(__dirname, 'entities');`,
+  `  if (fs.existsSync(entitiesDir)) {`,
+  `    for (const name of fs.readdirSync(entitiesDir).sort()) {`,
+  `      const file = path.join(entitiesDir, name, name + '.resolvers.js');`,
+  `      if (fs.existsSync(file)) {`,
+  `        const { resolvers } = require(file);`,
+  `        Object.assign(merged.Query, resolvers.Query);`,
+  `        Object.assign(merged.Mutation, resolvers.Mutation);`,
+  `      }`,
+  `    }`,
+  `  }`,
+  `  return merged;`,
+  `}`,
+  ``,
+  `module.exports = { loadResolvers };`,
+  ``,
+].join('\n');
+
+/** Repoint package.json main/start at the CLI/GraphQL entrypoint (+ graphql dep for GraphQL). */
+function endpointPackageJson(raw: string, kind: 'cli' | 'graphql'): string {
+  const entry = kind === 'cli' ? 'src/cli.js' : 'src/graphql-server.js';
+  let out = raw
+    .split(`"main": "src/server.js"`).join(`"main": "${entry}"`)
+    .split(`"start": "node src/server.js"`).join(`"start": "node ${entry}"`);
+  if (kind === 'graphql') {
+    out = out.replace(
+      `    "express": "__EXPRESS_VERSION__",`,
+      `    "express": "__EXPRESS_VERSION__",\n    "graphql": "16.9.0",`,
+    );
+  }
+  return out;
+}
+
+/** Append a truthful CLI/GraphQL section to the README. */
+function addEndpointReadme(raw: string, kind: 'cli' | 'graphql'): string {
+  const lines =
+    kind === 'cli'
+      ? [
+          ``,
+          `## CLI (project type: CLI)`,
+          ``,
+          `This project is a **command-line tool**, not an HTTP server: \`src/cli.js\` parses`,
+          `\`node src/cli.js <entity> <op> [--field value ...]\` (stdlib \`process.argv\` — **no`,
+          `dependency**), runs migrations + seed, dispatches to the entity command`,
+          `(\`src/commands.js\` auto-discovers \`src/entities/<name>/<name>.commands.js\`), prints`,
+          `the JSON result, and exits. Commands reuse the SAME domain services the REST API`,
+          `would. Example: \`node src/cli.js ticket list\` / \`node src/cli.js ticket create --title Hi\`.`,
+          ``,
+        ]
+      : [
+          ``,
+          `## GraphQL API (project type: GraphQL API)`,
+          ``,
+          `This project exposes **one GraphQL endpoint**, \`POST /graphql\`, instead of the REST`,
+          `routes: \`schema.graphql\` is the deterministic SDL (a type per entity; queries +`,
+          `mutations from CRUD), and \`src/resolvers.js\` merges the per-entity resolvers`,
+          `(\`src/entities/<name>/<name>.resolvers.js\`), which call the SAME domain services the`,
+          `REST API would. Uses the \`graphql\` reference runtime (in \`package.json\`). Start with`,
+          `\`npm start\`; query e.g. \`{ tickets { id title } }\`.`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 export interface ExpressPluginOptions {
   /** Override the bundled templates directory (tests only). */
   templatesDir?: string;
@@ -676,14 +904,20 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
       const projectType = model.getPhaseASettings().projectType;
       const workerKind: 'cron' | 'queue' | null =
         projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
+      // Day 36: CLI + GraphQL are ALSO entrypoint/route-table projections that swap
+      // server.js/app.js. `projectKind` covers all four; a null value is the literal
+      // bypass (Web App / API-only / Static Site + API run the exact original walk).
+      const endpointKind: 'cli' | 'graphql' | null =
+        projectType === 'CLI' ? 'cli' : projectType === 'GraphQL API' ? 'graphql' : null;
+      const swapsHttpEntrypoint = workerKind !== null || endpointKind !== null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
-        // Worker types swap the HTTP entrypoint: skip the two HTTP-only shell files
-        // (server.js = listen, app.js = the router auto-mount / route table). Every
-        // other template (db/migrate/seed/auth/http-error/Dockerfile/compose/migrations)
-        // is the domain layer, reused unchanged.
-        if (workerKind && (relRaw === 'src/server.js' || relRaw === 'src/app.js')) continue;
+        // Worker/CLI/GraphQL types swap the HTTP entrypoint: skip the two HTTP-only
+        // shell files (server.js = listen, app.js = the router auto-mount / route
+        // table). Every other template (db/migrate/seed/auth/http-error/Dockerfile/
+        // compose/migrations) is the domain layer, reused unchanged.
+        if (swapsHttpEntrypoint && (relRaw === 'src/server.js' || relRaw === 'src/app.js')) continue;
         let raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
         if (workerKind) {
           // Repoint main/start at the worker entrypoint (+ amqplib dep for queue),
@@ -691,6 +925,12 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
           // instructions no longer apply).
           if (relRaw === 'package.json') raw = workerPackageJson(raw, workerKind);
           else if (relRaw === 'README.md') raw = addWorkerReadme(raw, workerKind);
+        }
+        if (endpointKind) {
+          // Repoint main/start at the CLI/GraphQL entrypoint (+ graphql dep for
+          // GraphQL), and append a truthful section to the README.
+          if (relRaw === 'package.json') raw = endpointPackageJson(raw, endpointKind);
+          else if (relRaw === 'README.md') raw = addEndpointReadme(raw, endpointKind);
         }
         if (email) {
           if (relRaw === 'package.json') raw = addNodemailerDep(raw);
@@ -728,6 +968,22 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
         files.push({ relPath: 'src/dispatcher.js', content: applyTokens(QUEUE_DISPATCHER_JS, tokens), ownership: 'thraksha' });
         files.push({ relPath: 'src/broker.js', content: applyTokens(QUEUE_BROKER_JS, tokens), ownership: 'thraksha' });
       }
+      // Day 36: the CLI / GraphQL entrypoint + route-table shell (in place of the
+      // skipped server.js/app.js). The per-entity command/resolver comes from
+      // generateEntity; schema.graphql is the deterministic SDL (shared core builder).
+      if (endpointKind === 'cli') {
+        files.push({ relPath: 'src/cli.js', content: applyTokens(CLI_ENTRYPOINT_JS, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'src/commands.js', content: applyTokens(CLI_COMMANDS_JS, tokens), ownership: 'thraksha' });
+      } else if (endpointKind === 'graphql') {
+        files.push({ relPath: 'src/graphql-server.js', content: applyTokens(GRAPHQL_SERVER_JS, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'src/resolvers.js', content: applyTokens(GRAPHQL_RESOLVERS_JS, tokens), ownership: 'thraksha' });
+        // The deterministic SDL — the load-bearing artifact (stable, sorted ordering).
+        const sdl = buildCanonicalSdl(model.getEntities(), {
+          multiUser: model.getPhaseASettings().multiUser === true,
+          naming: model.getStyle().namingConvention,
+        });
+        files.push({ relPath: 'schema.graphql', content: sdl, ownership: 'thraksha' });
+      }
       // Databases without RETURNING (e.g. MySQL) need a different runtime driver
       // module; swap src/db.js for the mysql2 adapter. Postgres keeps the bundled
       // pg pool template unchanged (byte-identical).
@@ -752,6 +1008,10 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
       const projectType = context.projectType;
       if (projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
       if (projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
+      // Day 36: CLI + GraphQL swap the entity's HTTP route/controller layer for a
+      // command / resolver slice, reusing the domain files byte-identically.
+      if (projectType === 'CLI') return generateCliEntityFiles(entity, ctx);
+      if (projectType === 'GraphQL API') return generateGraphqlEntityFiles(entity, ctx);
       // Day 13: architectureDepth branches the FILE SET. 'default' is a literal
       // bypass (generateEntityFiles untouched → the 20 hashes are frozen).
       return context.style.architectureDepth === 'simple'

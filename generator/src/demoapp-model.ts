@@ -35,7 +35,7 @@ export function buildDemoAppModel(
   overrides: {
     backend?: string;
     database?: string;
-    projectType?: 'Web App' | 'API-only' | 'Cron Worker' | 'Queue Consumer';
+    projectType?: 'Web App' | 'API-only' | 'Cron Worker' | 'Queue Consumer' | 'CLI' | 'GraphQL API' | 'Static Site + API';
   } = {},
 ): ProjectModel {
   return assembleBlueprint({
