@@ -39,6 +39,7 @@ import { canonicalStringify } from './core/canonical-json.js';
 import { requiredToolchains, parseVersion, compareToPin, buildReport, type ProbeResult } from './detect/detect-core.js';
 import { emptyContent, contentFillState, type SlotContent } from './core/slot-content.js';
 import { fillContextOf, buildFillSpecs, orchestrateFill, type SlotFiller } from './fill/fill-core.js';
+import { ingestDesignTokens, canonicalTokens, figmaEligibility } from './figma/figma-ingest.js';
 import { aiConfigFromEnv, aiFillerFromEnv } from './fill/fill-ai.js';
 import type { GeneratedFile } from './core/plugin.js';
 
@@ -867,6 +868,68 @@ async function main(): Promise<void> {
       /team_id:\s*(int|Optional\[int\])/.test(pySch) &&                     // FastAPI: schema field team_id
       /"team"/.test(djSer);                                                 // Django: relation name (snake), already consistent
     record(consistent, 'FK wire key is snake_case in all 5 stacks (Express/Go/Spring fixed; Python/Django already) — mixed-key closed');
+  }
+
+  // ══ PART 1p — Figma token ingestion: the deterministic round-trip (Eco-Day 31) ══════
+  // Phase 3 opens a NEW INPUT SURFACE: Figma → structured W3C design tokens → a deterministic
+  // model input → a canonical design-tokens.json. The pure ingestion CORE (figma-ingest.ts) is
+  // fixture-tested here with a CANNED Figma export (no Figma runtime — that lives at the
+  // impure edge). The default (no designTokens) is a literal bypass — the 75 digests above
+  // reproduce byte-identical (the layer is additive). Eligible → tokens; ineligible → SLOTS.
+  process.stdout.write('\n=== PART 1p: Figma token ingestion round-trip (Eco-Day 31) ===\n');
+  {
+    // A canned Figma export (W3C token JSON), deliberately UNSORTED to prove canonicalization.
+    const TOKENS = {
+      spacing: { md: { $type: 'dimension', $value: '16px' }, sm: { $type: 'dimension', $value: '8px' } },
+      color: { primary: { $type: 'color', $value: '#3366ff' }, surface: { $type: 'color', $value: '#ffffff' } },
+      font: { body: { $type: 'fontFamily', $value: 'Inter' } },
+    };
+
+    // (a) ingestDesignTokens → canonical, sorted, deterministic (input order never leaks).
+    const dt = ingestDesignTokens(TOKENS);
+    const keys = Object.keys(dt).sort();
+    const canon1 = canonicalTokens(dt);
+    const canon2 = canonicalTokens(ingestDesignTokens(TOKENS));
+    const ingestOk =
+      JSON.stringify(keys) === '["color.primary","color.surface","font.body","spacing.md","spacing.sm"]' &&
+      dt['color.primary'].type === 'color' && dt['color.primary'].value === '#3366ff' &&
+      dt['spacing.sm'].type === 'dimension' && dt['spacing.sm'].value === '8px' &&
+      canon1 === canon2 && /"color.primary"[\s\S]*"spacing.sm"/.test(canon1); // sorted order
+    record(ingestOk, 'ingestDesignTokens: W3C token JSON → canonical DesignTokens (sorted, deterministic, no order leak)');
+
+    // (b) the ELIGIBILITY gate — eligible → tokens; ineligible → SLOTS (the Phase-2 path).
+    const elig = figmaEligibility({ tokens: TOKENS, autoLayout: true, namedVariables: true });
+    const inelig = figmaEligibility({ tokens: TOKENS, autoLayout: false, namedVariables: true, unmappable: ['HeroBanner'] });
+    const eligOk =
+      elig.eligible === true && Object.keys(elig.tokens).length === 5 &&
+      inelig.eligible === false && inelig.slots.some((s) => s.id === 'figma.review' && s.type === 'design-review') &&
+      inelig.slots.some((s) => s.id === 'figma.HeroBanner') && /not generator-eligible.*no Auto Layout.*routed to slots/.test(inelig.reason);
+    record(eligOk, 'eligibility: eligible (auto-layout + named vars) → tokens; ineligible → SLOTS (explicit, never guessed)');
+
+    // (c) ROUND-TRIP DETERMINISM: same tokens → byte-identical model input → byte-identical
+    // generated shell (twice-identical); a Figma-derived project → its own additive baseline.
+    const figProject = () => { const m = createProjectModel({ projectName: 'Themed', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' }); m.setDesignTokens(dt); m.addEntity({ name: 'Item', fields: [{ name: 'name', type: 'String', required: true }] }); return m; };
+    const a = hashFiles(await filesOf(figProject()));
+    const b = hashFiles(await filesOf(figProject()));
+    bake('FIGMA|Express|themed', a);
+    const files = await filesOf(figProject());
+    const tokensFile = files.find((f) => f.relPath === 'design-tokens.json');
+    record(a === b && a === 'f9a8e7c97d9c52aa7cdb58f7ae594af7af9481c91cd58d114b9d0e12b0bf2030' && !!tokensFile,
+      'round-trip: Figma-derived project twice-identical == recorded additive baseline (design-tokens.json emitted)', a.slice(0, 16));
+
+    // (d) DEFAULT = LITERAL BYPASS: no designTokens ⇒ NO design-tokens.json (the artifact is
+    // additive; its absence is what keeps the frozen backstop byte-identical).
+    const noFig = await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }));
+    record(!noFig.some((f) => f.relPath === 'design-tokens.json'), 'default (no Figma) → NO design-tokens.json artifact (additive; frozen backstop byte-identical)');
+
+    // (e) UI==CLI: designTokens through assembleBlueprint == the programmatic path, byte-identical.
+    const choices: BlueprintChoices = {
+      settings: { projectName: 'Themed', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' },
+      designTokens: dt,
+      entities: [{ name: 'Item', fields: [{ name: 'name', type: 'String', required: true }] }],
+    };
+    const ui = hashFiles(await filesOf(assembleBlueprint(choices)));
+    record(ui === a, 'UI==CLI for Figma tokens: assembleBlueprint == programmatic path, byte-identical', ui.slice(0, 16));
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

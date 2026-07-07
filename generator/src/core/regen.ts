@@ -24,6 +24,7 @@ import type { ProjectModel } from './project-model.js';
 import type { BackendPlugin, GeneratedFile } from './plugin.js';
 import { activeIntegrationLines } from './integrations.js';
 import { renderSlotsSection } from './slots.js';
+import { canonicalTokens, hasTokens } from '../figma/figma-ingest.js';
 
 // ---------------------------------------------------------------------------
 // The manifest (traceability, Law 12). Composed from agnostic model data plus
@@ -117,6 +118,18 @@ export async function buildFileSet(model: ProjectModel, plugin: BackendPlugin): 
   if (slotsSection) {
     const readme = files.find((f) => f.relPath === 'README.md');
     if (readme) readme.content = readme.content.replace(/\s*$/, '\n') + slotsSection;
+  }
+
+  // 1c) Figma DESIGN TOKENS (Day 31 — the Phase-3 input surface). When a project ingested
+  //     Figma tokens, a canonical `design-tokens.json` artifact is emitted (root, agnostic —
+  //     Law 25 honoured). NO tokens (the default {}) ⇒ hasTokens is false ⇒ nothing is pushed
+  //     ⇒ a literal bypass: the shell + the frozen backstop stay byte-identical. The tokens
+  //     came from the PURE ingestion core (Figma export → canonical DesignTokens); no Figma
+  //     runtime and no AI touch generation (ADR-001). Round-trip deterministic: same tokens →
+  //     byte-identical artifact (canonicalTokens sorts keys).
+  const designTokens = model.getDesignTokens();
+  if (hasTokens(designTokens)) {
+    files.push({ relPath: 'design-tokens.json', content: canonicalTokens(designTokens), ownership: 'thraksha' });
   }
 
   // 2) One entity at a time, in model order (V-numbering etc. is the plugin's job).

@@ -31,6 +31,7 @@ import { type CodingStyle, defaultCodingStyle } from './style.js';
 import { type Integrations, defaultIntegrations } from './integrations.js';
 import { type StackVersions, defaultVersionsFor } from './versions.js';
 import { type SlotDecl } from './slots.js';
+import { type DesignTokens } from '../figma/figma-ingest.js';
 
 // ---------------------------------------------------------------------------
 // Domain types — the Project Model shapes (per docs/INTAKE-SPEC.md).
@@ -185,6 +186,14 @@ export interface ProjectState {
    * shell is byte-identical across empty/partial/full content states BY CONSTRUCTION. No AI.
    */
   slots: SlotDecl[];
+  /**
+   * The ingested Figma DESIGN TOKENS (Day 31) — the Phase-3 input surface. A normalized,
+   * canonical map (token path → { type, value }) produced by the pure ingestion core from a
+   * Figma export's W3C token JSON. Default {} (no Figma) is a literal bypass: buildFileSet
+   * emits no `design-tokens.json`, so the shell + the frozen backstop stay byte-identical.
+   * Non-empty ⇒ a canonical `design-tokens.json` artifact (round-trip deterministic). AI-free.
+   */
+  designTokens: DesignTokens;
 }
 
 /** The Project Model API — the "map" the platform reads and updates. */
@@ -219,7 +228,11 @@ export interface ProjectModel {
   getSlots(): SlotDecl[];
   /** Set the slot declarations (a post-setup structural choice; default [] = bypass). */
   setSlots(slots: SlotDecl[]): void;
-  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions + slots. */
+  /** The ingested Figma design tokens (default {} — a literal bypass) — Day 31. */
+  getDesignTokens(): DesignTokens;
+  /** Set the ingested design tokens (Figma → the ingestion core → here; default {} = bypass). */
+  setDesignTokens(tokens: DesignTokens): void;
+  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions + slots + designTokens. */
   getState(): ProjectState;
 }
 
@@ -426,7 +439,8 @@ export function createProjectModel(settings: PhaseASettingsInput): ProjectModel 
   // via setIntegrations (like the coding style), so the wizard/CLI opt in later.
   // Description defaults to '' (a literal bypass) — supplied later via setDescription.
   // Slots default to [] (a literal bypass) — declared later via setSlots (Day 21).
-  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions, []);
+  // Design tokens default to {} (a literal bypass) — ingested later via setDesignTokens (Day 31).
+  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions, [], {});
 }
 
 /**
@@ -443,6 +457,7 @@ function makeModel(
   initialDescription: string,
   initialVersions: StackVersions,
   initialSlots: SlotDecl[],
+  initialDesignTokens: DesignTokens,
 ): ProjectModel {
   // Held in the closure like Phase-A/entities. Default is a no-op style / no
   // integrations / blank description — each a literal bypass. Versions default to
@@ -453,6 +468,8 @@ function makeModel(
   let description: string = initialDescription;
   let versions: StackVersions = { ...initialVersions };
   let slots: SlotDecl[] = initialSlots.map((s) => ({ id: s.id, type: s.type }));
+  // Design tokens default to {} (Day 31) — a literal bypass (buildFileSet emits no artifact).
+  let designTokens: DesignTokens = { ...initialDesignTokens };
   return {
     getPhaseASettings(): PhaseASettings {
       const copy: Record<string, unknown> = {};
@@ -564,6 +581,22 @@ function makeModel(
       slots = next.map((s) => ({ id: s.id, type: s.type }));
     },
 
+    getDesignTokens(): DesignTokens {
+      // A copy (each token too) so callers cannot mutate state. The keys canonicalise
+      // (sorted) at emit, so input order never leaks into output.
+      const copy: DesignTokens = {};
+      for (const k of Object.keys(designTokens)) copy[k] = { type: designTokens[k].type, value: designTokens[k].value };
+      return copy;
+    },
+
+    setDesignTokens(next: DesignTokens): void {
+      // The normalized tokens from the ingestion core. Empty {} is the literal bypass
+      // (buildFileSet emits no design-tokens.json). Round-trip deterministic (canonical emit).
+      const copy: DesignTokens = {};
+      for (const k of Object.keys(next)) copy[k] = { type: next[k].type, value: next[k].value };
+      designTokens = copy;
+    },
+
     getState(): ProjectState {
       return {
         phaseA: this.getPhaseASettings(),
@@ -574,6 +607,7 @@ function makeModel(
         description: this.getDescription(),
         versions: this.getVersions(),
         slots: this.getSlots(),
+        designTokens: this.getDesignTokens(),
       };
     },
   };
@@ -643,5 +677,10 @@ export function restoreProjectModel(state: ProjectSnapshot): ProjectModel {
   const slots: SlotDecl[] = Array.isArray(state.slots)
     ? state.slots.map((s) => ({ id: s.id, type: s.type }))
     : [];
-  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions, slots);
+  // Snapshots that predate Figma tokens (Day 31) have no `designTokens` — default to {} so
+  // those versions regenerate byte-for-byte (ADR-003). Non-empty ⇒ used verbatim (canonical).
+  const designTokens: DesignTokens = state.designTokens && typeof state.designTokens === 'object'
+    ? Object.fromEntries(Object.keys(state.designTokens).map((k) => [k, { type: state.designTokens[k].type, value: state.designTokens[k].value }]))
+    : {};
+  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions, slots, designTokens);
 }

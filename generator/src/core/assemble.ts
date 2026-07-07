@@ -44,6 +44,7 @@ import { type CodingStyle } from './style.js';
 import { type Integrations } from './integrations.js';
 import { type StackVersions, resolveVersions } from './versions.js';
 import { type SlotDecl } from './slots.js';
+import { type DesignTokens } from '../figma/figma-ingest.js';
 
 /**
  * The canonical, JSON-serialisable choices the wizard collects and the CLI passes.
@@ -63,6 +64,8 @@ export interface BlueprintChoices {
   description?: string;
   /** Optional typed content-slot declarations (default [] — a bypass; Day 21). */
   slots?: SlotDecl[];
+  /** Optional ingested Figma design tokens (default {} — a bypass; Day 31). */
+  designTokens?: DesignTokens;
   /** Entities in order (a belongs-to target must be defined earlier — the model checks). */
   entities?: EntitySpec[];
 }
@@ -95,6 +98,10 @@ export function assembleBlueprint(choices: BlueprintChoices): ProjectModel {
   // Slots: declared only when supplied. Omitted / [] ⇒ no setSlots effect and the
   // README post-process is a no-op — a literal bypass (byte-identical frozen output).
   if (choices.slots && choices.slots.length > 0) model.setSlots(choices.slots);
+  // Design tokens (Day 31): set only when a Figma ingestion supplied them. Omitted / {} ⇒
+  // no design-tokens.json ⇒ a literal bypass. The CONCRETE tokens (from the pure ingestion
+  // core) ride the SAME canonical seam ⇒ round-trip/UI==CLI determinism is structural.
+  if (choices.designTokens && Object.keys(choices.designTokens).length > 0) model.setDesignTokens(choices.designTokens);
 
   for (const spec of choices.entities ?? []) model.addEntity(spec);
 
