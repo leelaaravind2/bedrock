@@ -46,6 +46,7 @@ import { type StackVersions, resolveVersions } from './versions.js';
 import { type SlotDecl } from './slots.js';
 import { type DesignTokens } from '../figma/figma-ingest.js';
 import { type CiConfig } from './cicd.js';
+import { type SecurityConfig } from './security.js';
 
 /**
  * The canonical, JSON-serialisable choices the wizard collects and the CLI passes.
@@ -69,6 +70,8 @@ export interface BlueprintChoices {
   designTokens?: DesignTokens;
   /** Optional CI/CD config (default { provider: 'none' } — a bypass; Day 38). */
   cicd?: CiConfig;
+  /** Optional security-scan config (default { scan: 'none' } — a bypass; Day 43). */
+  security?: SecurityConfig;
   /** Entities in order (a belongs-to target must be defined earlier — the model checks). */
   entities?: EntitySpec[];
 }
@@ -109,6 +112,9 @@ export function assembleBlueprint(choices: BlueprintChoices): ProjectModel {
   // no workflow ⇒ a literal bypass (byte-identical frozen output). A declared provider rides the
   // SAME canonical seam ⇒ round-trip/UI==CLI determinism is structural.
   if (choices.cicd && choices.cicd.provider !== 'none') model.setCicd(choices.cicd);
+  // Security (Day 43): declared only when a scan is requested. Omitted / 'none' ⇒ no security
+  // artifacts ⇒ a literal bypass (byte-identical frozen output; the Day-38 ci.yml untouched).
+  if (choices.security && choices.security.scan !== 'none') model.setSecurity(choices.security);
 
   for (const spec of choices.entities ?? []) model.addEntity(spec);
 

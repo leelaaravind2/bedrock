@@ -1320,6 +1320,47 @@ async function main(): Promise<void> {
       'inert provenance markers present (THRAKSHA-OWNED comments) — allowed, NOT stripped (stripping would move frozen hashes)');
   }
 
+  // ══ PART 1u — deterministic security scan (Semgrep) (Eco-Day 43) ═════════════
+  // A gated `security` field → a SEPARATE additive .github/workflows/security.yml + a PINNED
+  // custom semgrep-rules.yml (never the floating p/default registry). READ-ONLY (the scan reads
+  // the project; buildFileSet never runs Semgrep). The Day-38 ci.yml stays byte-identical (the
+  // scan is a separate workflow, not a step). CERTAIN findings (no AI — that's Day 45). Non-hash.
+  process.stdout.write('\n=== PART 1u: deterministic security scan — Semgrep (Eco-Day 43) ===\n');
+  {
+    const SECURITY = '8407fa2c3c8e87d37aab4fd41a014ec6b89d640acc34d6b1d522a90757c5549f';
+    const secModel = (): ProjectModel => { const m = buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }); m.setSecurity({ scan: 'semgrep' }); return m; };
+    const a = await filesOf(secModel());
+    const b = await filesOf(secModel());
+    bake('security|Express|semgrep', hashFiles(a));
+    const paths = new Set(a.map((f) => f.relPath));
+    const defPaths = new Set((await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }))).map((f) => f.relPath));
+    const added = a.filter((f) => !defPaths.has(f.relPath)).map((f) => f.relPath).sort();
+
+    // (a) scan='semgrep' twice-identical == recorded additive baseline.
+    record(hashFiles(a) === hashFiles(b) && hashFiles(a) === SECURITY, 'scan=semgrep twice-identical == recorded additive baseline', hashFiles(a).slice(0, 16));
+
+    // (b) ADDITIVE + SEPARATE: exactly security.yml + semgrep-rules.yml added; ci.yml NOT added
+    //     (the scan is a separate workflow — the 5 Day-38 ci.yml baselines stay unmoved, PART 1s).
+    const additiveSeparate = added.length === 2 && added.includes('.github/workflows/security.yml') && added.includes('semgrep-rules.yml') && !paths.has('.github/workflows/ci.yml');
+    record(additiveSeparate, 'additive + SEPARATE: only security.yml + semgrep-rules.yml added; ci.yml NOT touched (Day-38 baselines unmoved)');
+
+    // (c) PINNED + not the floating registry: security.yml pins the Semgrep version + the actions;
+    //     the rules are the shipped custom ruleset (thraksha-* ids), NOT p/default.
+    const sm = toMap(a); const sec = sm.get('.github/workflows/security.yml') ?? '';
+    const rules = sm.get('semgrep-rules.yml') ?? '';
+    // Pinned Semgrep version + pinned actions (no floating); the scan uses the SHIPPED rules file
+    // (--config semgrep-rules.yml), NOT a floating remote registry (no `--config p/…`/`auto`).
+    const usesShippedRules = /--config semgrep-rules\.yml/.test(sec) && !/--config (p\/|auto)/.test(sec);
+    const pinned = /semgrep==1\.90\.0/.test(sec) && /@v\d+/.test(sec) && !/@latest|@main|@master/.test(sec) && usesShippedRules && /id: thraksha-/.test(rules);
+    record(pinned, 'pinned: security.yml pins semgrep==1.90.0 + pinned actions (no floating); uses the shipped thraksha-* rules (not a floating registry)');
+
+    // (d) DEFAULT = LITERAL BYPASS: no security ⇒ NO security artifacts (additive; frozen backstop
+    //     byte-identical; the scan is read-only — buildFileSet never runs Semgrep, findings are scan-time).
+    const noSec = await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }));
+    record(!noSec.some((f) => f.relPath === 'semgrep-rules.yml' || f.relPath === '.github/workflows/security.yml'),
+      'default (no scan) → NO security artifacts (additive; read-only; frozen backstop byte-identical)');
+  }
+
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
   process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);

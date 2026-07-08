@@ -26,6 +26,7 @@ import { activeIntegrationLines } from './integrations.js';
 import { renderSlotsSection } from './slots.js';
 import { canonicalTokens, hasTokens } from '../figma/figma-ingest.js';
 import { renderCiWorkflow } from './cicd.js';
+import { renderSecurityArtifacts } from './security.js';
 
 // ---------------------------------------------------------------------------
 // The manifest (traceability, Law 12). Composed from agnostic model data plus
@@ -158,6 +159,18 @@ export async function buildFileSet(model: ProjectModel, plugin: BackendPlugin): 
   const ciFile = renderCiWorkflow(model.getCicd(), plugin.ciProfile?.(), model.getVersions());
   if (ciFile) {
     files.push({ relPath: ciFile.relPath, content: ciFile.content, ownership: 'thraksha' });
+  }
+
+  // 2b) Security scan wiring (Day 43 — a deterministic, gated, READ-ONLY layer). When a scan is
+  //     declared, a SEPARATE additive `.github/workflows/security.yml` + a PINNED `semgrep-rules.yml`
+  //     are emitted (core/security.ts): a pinned Semgrep version + a fixed custom ruleset → the same
+  //     project yields the same CERTAIN findings. It is a SEPARATE workflow (NOT a step in ci.yml), so
+  //     the 5 frozen Day-38 ci.yml baselines stay byte-identical. Thraksha NEVER runs Semgrep here —
+  //     these are pure string projections; findings are a scan-time output (CI or the in-app scan
+  //     action). The DEFAULT ({ scan: 'none' }) ⇒ renderSecurityArtifacts returns [] ⇒ a literal
+  //     bypass: the frozen backstop stays byte-identical. No AI (the AI scan is Day 45 — advisory).
+  for (const artifact of renderSecurityArtifacts(model.getSecurity())) {
+    files.push({ relPath: artifact.relPath, content: artifact.content, ownership: 'thraksha' });
   }
 
   // 3) The manifest lists every OTHER file; build it before appending itself.

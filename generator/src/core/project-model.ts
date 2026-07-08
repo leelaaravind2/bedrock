@@ -30,6 +30,7 @@
 import { type CodingStyle, defaultCodingStyle } from './style.js';
 import { type Integrations, defaultIntegrations } from './integrations.js';
 import { type CiConfig, defaultCiConfig } from './cicd.js';
+import { type SecurityConfig, defaultSecurityConfig } from './security.js';
 import { type StackVersions, defaultVersionsFor } from './versions.js';
 import { type SlotDecl } from './slots.js';
 import { type DesignTokens } from '../figma/figma-ingest.js';
@@ -229,6 +230,14 @@ export interface ProjectState {
    * whose action refs are all pinned (never floating). No timestamps, no matrix. AI-free.
    */
   cicd: CiConfig;
+  /**
+   * The optional security-scan config (Day 43). Default { scan: 'none' } is a literal
+   * bypass: buildFileSet emits no `semgrep-rules.yml` / `.github/workflows/security.yml`,
+   * so the shell + the frozen backstop (incl. the Day-38 ci.yml) stay byte-identical.
+   * 'semgrep' ⇒ a SEPARATE additive security workflow + a PINNED custom ruleset (pinned
+   * Semgrep version + fixed rules → deterministic CERTAIN findings). Read-only, no AI.
+   */
+  security: SecurityConfig;
 }
 
 /** The Project Model API — the "map" the platform reads and updates. */
@@ -271,7 +280,11 @@ export interface ProjectModel {
   getCicd(): CiConfig;
   /** Set the CI/CD config (a post-setup choice; default 'none' = bypass; ADR-003 deterministic). */
   setCicd(cicd: CiConfig): void;
-  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions + slots + designTokens + cicd. */
+  /** The optional security-scan config (default { scan: 'none' } — a literal bypass) — Day 43. */
+  getSecurity(): SecurityConfig;
+  /** Set the security-scan config (a post-setup choice; default 'none' = bypass; read-only, deterministic). */
+  setSecurity(security: SecurityConfig): void;
+  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions + slots + designTokens + cicd + security. */
   getState(): ProjectState;
 }
 
@@ -489,7 +502,8 @@ export function createProjectModel(settings: PhaseASettingsInput): ProjectModel 
   // Slots default to [] (a literal bypass) — declared later via setSlots (Day 21).
   // Design tokens default to {} (a literal bypass) — ingested later via setDesignTokens (Day 31).
   // CI/CD defaults to { provider: 'none' } (a literal bypass) — declared later via setCicd (Day 38).
-  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions, [], {}, defaultCiConfig);
+  // Security defaults to { scan: 'none' } (a literal bypass) — declared later via setSecurity (Day 43).
+  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions, [], {}, defaultCiConfig, defaultSecurityConfig);
 }
 
 /**
@@ -508,6 +522,7 @@ function makeModel(
   initialSlots: SlotDecl[],
   initialDesignTokens: DesignTokens,
   initialCicd: CiConfig,
+  initialSecurity: SecurityConfig,
 ): ProjectModel {
   // Held in the closure like Phase-A/entities. Default is a no-op style / no
   // integrations / blank description — each a literal bypass. Versions default to
@@ -522,6 +537,8 @@ function makeModel(
   let designTokens: DesignTokens = { ...initialDesignTokens };
   // CI/CD defaults to { provider: 'none' } (Day 38) — a literal bypass (no workflow emitted).
   let cicd: CiConfig = { provider: initialCicd.provider };
+  // Security defaults to { scan: 'none' } (Day 43) — a literal bypass (no scan artifacts emitted).
+  let security: SecurityConfig = { scan: initialSecurity.scan };
   return {
     getPhaseASettings(): PhaseASettings {
       const copy: Record<string, unknown> = {};
@@ -661,6 +678,18 @@ function makeModel(
       cicd = { provider: next.provider };
     },
 
+    getSecurity(): SecurityConfig {
+      // A copy so callers cannot mutate state. Default { scan: 'none' } is the literal
+      // bypass (buildFileSet emits no security artifacts).
+      return { scan: security.scan };
+    },
+
+    setSecurity(next: SecurityConfig): void {
+      // A post-setup deterministic choice. 'none' is the literal bypass; 'semgrep' ⇒
+      // buildFileSet emits a SEPARATE additive security.yml + the pinned rules (read-only).
+      security = { scan: next.scan };
+    },
+
     getState(): ProjectState {
       return {
         phaseA: this.getPhaseASettings(),
@@ -673,6 +702,7 @@ function makeModel(
         slots: this.getSlots(),
         designTokens: this.getDesignTokens(),
         cicd: this.getCicd(),
+        security: this.getSecurity(),
       };
     },
   };
@@ -752,5 +782,10 @@ export function restoreProjectModel(state: ProjectSnapshot): ProjectModel {
   const cicd: CiConfig = state.cicd && typeof state.cicd === 'object' && typeof state.cicd.provider === 'string'
     ? { provider: state.cicd.provider }
     : defaultCiConfig;
-  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions, slots, designTokens, cicd);
+  // Snapshots that predate the security scan (Day 43) have no `security` — default to
+  // { scan: 'none' } so those versions regenerate byte-for-byte (ADR-003).
+  const security: SecurityConfig = state.security && typeof state.security === 'object' && typeof state.security.scan === 'string'
+    ? { scan: state.security.scan }
+    : defaultSecurityConfig;
+  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions, slots, designTokens, cicd, security);
 }
