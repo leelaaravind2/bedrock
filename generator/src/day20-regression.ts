@@ -32,6 +32,7 @@ import { buildTeamTrackerModel } from './teamtracker-model.js';
 import { buildTaskModel } from './task-model.js';
 import { buildFileSet, applyPlan } from './core/regen.js';
 import { previewImpact, diffFileSets, fileHash, type ImpactAction } from './map/impact-map.js';
+import { buildFlowMap, type FlowNode } from './map/flow-map.js';
 import { selectBackendPlugin } from './plugins/registry.js';
 import { createProjectModel, restoreProjectModel, type ProjectModel } from './core/project-model.js';
 import { defaultCodingStyle, toSnakeCase, toCamelCase, applyNaming, type CodingStyle } from './core/style.js';
@@ -1545,6 +1546,96 @@ async function main(): Promise<void> {
     void (await previewImpact(mk({ entities: [ticket] }), mk({ entities: [ticket, team] }))); // run the Map
     const after = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' })));
     record(before === after, 'READ-ONLY: running the Map emits nothing into generation (buildFileSet output byte-identical before/after a preview)');
+  }
+
+  // ══ PART 1x — THE MAP: flow map, declared-model projection + traceability anchor (Eco-Day 50) ══
+  // The Map's SECOND half. buildFlowMap(model) projects the DECLARED blueprint (entities +
+  // relationships + integrations) into a request-lifecycle / data-flow map — NOT parsed from generated
+  // code (parsing = inference; this is traceability). This PART proves the projection is FAITHFUL +
+  // EXACT: (A) same model → same FlowMap (deterministic); (B) nodes/edges are one-to-one with the
+  // DECLARED model (every entity/relationship/active-integration → its node/edge; NO phantom node);
+  // (C) THE TRACEABILITY ANCHOR — every entity node's lifecycle artifacts EXIST in buildFileSet(model)
+  // (Express, concrete; entity-name attribution on relPaths — neutral, no per-stack logic in map/;
+  // other stacks reasoned/staged), exact because generation is deterministic. The flow map is
+  // READ-ONLY: it reads ONLY the model (never buildFileSet), emits nothing, and moved NO frozen hash.
+  process.stdout.write('\n=== PART 1x: the Map — flow map, declared-model projection + traceability anchor (Eco-Day 50) ===\n');
+  {
+    const eqSet = (a: string[], b: string[]): boolean => { const x = [...a].sort(); const y = [...b].sort(); return x.length === y.length && x.every((v, i) => v === y[i]); };
+    const LAYERS: FlowNode['kind'][] = ['route', 'controller', 'service', 'repository', 'model', 'table'];
+
+    const flowModel = (): ProjectModel => {
+      const m = createProjectModel({ projectName: 'FlowApp', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' });
+      m.addEntity({ name: 'Team', fields: [{ name: 'name', type: 'String', required: true }], relationships: [{ kind: 'has-many', target: 'Ticket' }] });
+      m.addEntity({ name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true }], relationships: [{ kind: 'belongs-to', target: 'Team' }] });
+      m.setIntegrations({ email: 'smtp', ai: 'none' });
+      return m;
+    };
+    const m = flowModel();
+    const fm = buildFlowMap(m);
+    const entities = m.getEntities();
+    const declaredNames = entities.map((e) => e.name);
+
+    // (A) DETERMINISTIC: same model → byte-identical FlowMap (twice).
+    record(JSON.stringify(buildFlowMap(flowModel())) === JSON.stringify(buildFlowMap(flowModel())),
+      'flow map DETERMINISTIC: same model → byte-identical FlowMap (twice — a pure projection of the declared model)');
+
+    // (B) FAITHFUL PROJECTION: nodes/edges one-to-one with the DECLARED model (no phantom, no missing).
+    // entity nodes == declared entities.
+    const entityNodes = fm.nodes.filter((n) => n.kind === 'entity').map((n) => n.label);
+    const entityOk = eqSet(entityNodes, declaredNames);
+    // every declared relationship → exactly one matching edge (from entity:E → entity:target, label carries the kind); count matches (no phantom).
+    const declaredRels = entities.flatMap((e) => e.relationships.map((r) => ({ from: e.name, to: r.target, kind: r.kind })));
+    const relEdges = fm.edges.filter((x) => x.kind === 'relationship');
+    const relsOk = relEdges.length === declaredRels.length &&
+      declaredRels.every((r) => relEdges.some((x) => x.from === `entity:${r.from}` && x.to === `entity:${r.to}` && (x.label ?? '').startsWith(r.kind)));
+    // integration edges present IFF active (email:smtp → 1 edge; ai:none → 0).
+    const intEdges = fm.edges.filter((x) => x.kind === 'integration');
+    const intOk = intEdges.length === 1 && intEdges[0].to === 'integration:email' && !fm.nodes.some((n) => n.id === 'integration:ai');
+    // completeness: every declared entity has all 6 lifecycle nodes + the app→entity edge.
+    const lifecycleOk = declaredNames.every((e) =>
+      LAYERS.every((k) => fm.nodes.some((n) => n.id === `${k}:${e}`)) &&
+      fm.edges.some((x) => x.from === 'app' && x.to === `entity:${e}` && x.kind === 'lifecycle'));
+    // NO PHANTOM node: every node id resolves to a declared source (app | entity | a lifecycle layer of a declared entity | an active integration).
+    const validIds = new Set<string>(['app', 'integration:email']);
+    for (const e of declaredNames) { validIds.add(`entity:${e}`); for (const k of LAYERS) validIds.add(`${k}:${e}`); }
+    const noPhantom = fm.nodes.every((n) => validIds.has(n.id));
+    record(entityOk && relsOk && intOk && lifecycleOk && noPhantom,
+      'flow map FAITHFUL PROJECTION: entity nodes == declared entities; each relationship/active-integration → its edge; full lifecycle per entity; NO phantom node (one-to-one with the model)',
+      `${fm.nodes.length}n/${fm.edges.length}e`);
+
+    // (B2) the INTEGRATION LITERAL BYPASS: no integrations declared ⇒ zero integration nodes/edges.
+    const noIntModel = createProjectModel({ projectName: 'FlowApp', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' });
+    noIntModel.addEntity({ name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true }] });
+    const noIntFm = buildFlowMap(noIntModel);
+    record(!noIntFm.nodes.some((n) => n.kind === 'integration') && !noIntFm.edges.some((x) => x.kind === 'integration'),
+      'flow map integration LITERAL BYPASS: no integrations declared → zero integration nodes/edges');
+
+    // (C) THE TRACEABILITY ANCHOR (Express, concrete): every entity node's lifecycle artifacts EXIST
+    // in buildFileSet(model) (SOUNDNESS — no node maps to a non-generated artifact); every entity
+    // dir under src/entities/ is a DECLARED entity (COVERAGE — nothing generated is untraceable).
+    // Entity-name attribution on relPaths — neutral (no per-stack filename logic in map/).
+    const files = await filesOf(m); // Express
+    const paths = files.map((f) => f.relPath);
+    const hasFor = (ent: string, re: RegExp) => paths.some((p) => p.toLowerCase().includes(ent.toLowerCase()) && re.test(p));
+    let sound = true;
+    for (const e of declaredNames) {
+      const ok = hasFor(e, /routes/) && hasFor(e, /controller/) && hasFor(e, /service/) && hasFor(e, /repository/) && hasFor(e, /\.model\./) &&
+        paths.some((p) => p.startsWith('migrations/') && p.toLowerCase().includes(e.toLowerCase()));
+      if (!ok) sound = false;
+    }
+    const entityDirs = new Set(paths.filter((p) => p.startsWith('src/entities/')).map((p) => p.split('/')[2]));
+    const declaredLower = declaredNames.map((e) => e.toLowerCase());
+    const coverage = [...entityDirs].every((d) => declaredLower.includes(d)) && declaredLower.every((d) => entityDirs.has(d));
+    record(sound && coverage,
+      'flow map TRACEABILITY ANCHOR (Express): every entity node → its lifecycle artifacts EXIST in buildFileSet (soundness); every entity dir is a declared entity (coverage) — exact because deterministic',
+      `dirs=[${[...entityDirs].sort().join(',')}]`);
+
+    // (D) READ-ONLY: building the flow map emits nothing into generation (buildFileSet byte-identical
+    // before/after) — the flow map reads ONLY the model, never buildFileSet.
+    const before = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' })));
+    void buildFlowMap(flowModel());
+    const after = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' })));
+    record(before === after, 'READ-ONLY: building a flow map emits nothing into generation (buildFileSet byte-identical before/after)');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

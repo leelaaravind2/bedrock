@@ -35,7 +35,9 @@
     "export": "node dist/export.js",
     "bench:export": "node dist/bench-export.js",
     "scan": "node dist/scan.js",
-    "map": "node dist/map.js"
+    "map": "node dist/map.js",
+    "flow-map": "node dist/flow-map.js",
+    "bench:phase4-mid": "node dist/phase4-mid-benchmark.js"
   },
   "devDependencies": {
     "@types/node": "22.20.0",
