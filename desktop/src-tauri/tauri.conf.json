@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Thraksha",
+  "productName": "Bedrock",
   "version": "0.1.0",
-  "identifier": "com.thraksha.desktop",
+  "identifier": "com.thraksha.bedrock",
   "build": {
     "frontendDist": "../src",
     "beforeBuildCommand": "npm run sync-gen"
@@ -11,7 +11,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Thraksha",
+        "title": "Bedrock",
         "width": 800,
         "height": 600
       }
