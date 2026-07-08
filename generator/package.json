@@ -34,7 +34,8 @@
     "bench:phase3": "node dist/phase3-benchmark.js",
     "export": "node dist/export.js",
     "bench:export": "node dist/bench-export.js",
-    "scan": "node dist/scan.js"
+    "scan": "node dist/scan.js",
+    "map": "node dist/map.js"
   },
   "devDependencies": {
     "@types/node": "22.20.0",

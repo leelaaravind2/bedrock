@@ -41,6 +41,7 @@ import { defaultIntegrations, type Integrations } from './core/integrations.js';
 import { buildDemoAppModel } from './demoapp-model.js';
 import { buildTeamTrackerModel } from './teamtracker-model.js';
 import { buildFileSet, computePlan, renderPreview, applyPlan } from './core/regen.js';
+import { previewImpact, renderImpact } from './map/impact-map.js';
 import { VersionStore } from './core/versioning.js';
 import { selectBackendPlugin } from './plugins/registry.js';
 import type { BackendPlugin } from './core/plugin.js';
@@ -362,6 +363,24 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
         developerCreate: plan.developerCreate,
         developerUntouched: plan.developerUntouched,
       },
+    });
+    return;
+  }
+
+  // --- THE MAP: impact preview (Eco-Day 47) -> previewImpact(current, proposed) ---
+  //     The Terraform-`plan` gate BEFORE generate: diff the LIVE model (current) against a
+  //     PROPOSED blueprint (assembled the same way /api/assemble builds a model — the Day-16
+  //     UI==CLI seam) → the EXACT { file, action, before, after } plan. READ-ONLY: writes
+  //     nothing (additive — /api/preview and /api/generate are unchanged). Approving still
+  //     goes through POST /api/generate (applyPlan). Truthful because generation is
+  //     deterministic + proven byte-for-byte real by day20:regress PART 1w.
+  if (route === 'POST /api/impact') {
+    const current = requireModel();
+    const proposed = assembleBlueprint(await readJson<BlueprintChoices>(req)); // the proposed model
+    const plan = await previewImpact(current, proposed); // engine — pure, writes nothing
+    sendJson(res, 200, {
+      text: renderImpact(projectName(), plan),
+      plan: { add: plan.add, change: plan.change, delete: plan.delete, noOp: plan.noOp, entries: plan.entries },
     });
     return;
   }

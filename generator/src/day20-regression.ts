@@ -24,10 +24,14 @@
  */
 
 import crypto from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { buildDemoAppModel } from './demoapp-model.js';
 import { buildTeamTrackerModel } from './teamtracker-model.js';
 import { buildTaskModel } from './task-model.js';
-import { buildFileSet } from './core/regen.js';
+import { buildFileSet, applyPlan } from './core/regen.js';
+import { previewImpact, diffFileSets, fileHash, type ImpactAction } from './map/impact-map.js';
 import { selectBackendPlugin } from './plugins/registry.js';
 import { createProjectModel, restoreProjectModel, type ProjectModel } from './core/project-model.js';
 import { defaultCodingStyle, toSnakeCase, toCamelCase, applyNaming, type CodingStyle } from './core/style.js';
@@ -1404,6 +1408,143 @@ async function main(): Promise<void> {
     const boom: AiSuggester = async () => { throw new Error('model down'); };
     const safe = await orchestrateAiScan(specs, boom);
     record(safe.length === 0, 'orchestrateAiScan: a throwing suggester degrades to 0 findings (graceful; never a crash; never the gate)');
+  }
+
+  // ══ PART 1w — THE MAP: impact preview, previewed==real byte-for-byte (Eco-Day 47) ══
+  // THE STAR FEATURE + its LOAD-BEARING correctness proof. previewImpact(current, proposed)
+  // diffs two PURE buildFileSet generations via the per-file frozen-hash convention (fileHash)
+  // → { file, action: add|change|delete|no-op, before, after }. This PART proves the preview is
+  // EXACT, not approximate: (1) the previewed before/after == the bytes REAL generation writes to
+  // disk (materialize each model via applyPlan → read disk back — non-circular via the export==disk
+  // anchor, PART 1t); (2) applying proposed FOR REAL onto the materialized-current tree yields
+  // applyPlan buckets that match the preview (thraksha files; developer files protected by ADR-002 —
+  // the Map's 'delete' is a file-SET projection, NOT a disk-delete); (3) the hash-precheck's changed
+  // set == a brute-force full-content compare (no missed/false change). The Map is READ-ONLY: it
+  // CALLS buildFileSet but is never imported by it — 0 generation-path refs; it emits nothing into
+  // the project; adding it moved NO frozen hash (the 103 baked above are byte-identical). CI-enforced.
+  process.stdout.write('\n=== PART 1w: the Map — impact preview, previewed==real byte-for-byte (Eco-Day 47) ===\n');
+  {
+    const readTree = async (dir: string): Promise<Map<string, string>> => {
+      const out = new Map<string, string>();
+      const walk = async (d: string): Promise<void> => {
+        for (const e of (await fs.readdir(d, { withFileTypes: true })).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+          const full = path.join(d, e.name);
+          if (e.isDirectory()) await walk(full);
+          else out.set(path.relative(dir, full).split(path.sep).join('/'), await fs.readFile(full, 'utf8'));
+        }
+      };
+      await walk(dir);
+      return out;
+    };
+    const mkTmp = () => fs.mkdtemp(path.join(os.tmpdir(), 'thraksha-map-'));
+    const eqSet = (a: string[], b: string[]): boolean => { const x = [...a].sort(); const y = [...b].sort(); return x.length === y.length && x.every((v, i) => v === y[i]); };
+
+    // A model builder we fully control, so the (current → proposed) delta is exact.
+    const mk = (opts: { entities: Parameters<ProjectModel['addEntity']>[0][]; description?: string }): ProjectModel => {
+      const m = createProjectModel({ projectName: 'Mapp', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' });
+      for (const e of opts.entities) m.addEntity(e);
+      if (opts.description) m.setDescription(opts.description);
+      return m;
+    };
+    const ticket = { name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true }] };
+    const ticketPlus = { name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true }, { name: 'done', type: 'Boolean' }] };
+    const team = { name: 'Team', fields: [{ name: 'name', type: 'String', required: true }] };
+
+    // The five representative deltas — every action covered (add/change/delete/no-op).
+    const fixtures: { name: string; current: ProjectModel; proposed: ProjectModel }[] = [
+      { name: 'add-field   (→ change)', current: mk({ entities: [ticket] }), proposed: mk({ entities: [ticketPlus] }) },
+      { name: 'add-entity  (→ add)   ', current: mk({ entities: [ticket] }), proposed: mk({ entities: [ticket, team] }) },
+      { name: 'description (→ change README)', current: mk({ entities: [ticket] }), proposed: mk({ entities: [ticket], description: 'A small tracker.' }) },
+      { name: 'identical   (→ no-op) ', current: mk({ entities: [ticket] }), proposed: mk({ entities: [ticket] }) },
+      { name: 'remove-entity (→ delete)', current: mk({ entities: [ticket, team] }), proposed: mk({ entities: [ticket] }) },
+    ];
+
+    for (const fx of fixtures) {
+      const curFiles = await buildFileSet(fx.current, selectBackendPlugin(fx.current));
+      const propFiles = await buildFileSet(fx.proposed, selectBackendPlugin(fx.proposed));
+      const preview = diffFileSets(curFiles, propFiles);
+      const curMap = new Map(curFiles.map((f) => [f.relPath, f.content]));
+      const propMap = new Map(propFiles.map((f) => [f.relPath, f.content]));
+      const curOwn = new Map(curFiles.map((f) => [f.relPath, f.ownership]));
+      const propOwn = new Map(propFiles.map((f) => [f.relPath, f.ownership]));
+
+      // ── (A) LOAD-BEARING: previewed before/after == the bytes REAL generation writes to disk.
+      // Materialize EACH model to its OWN clean dir (all create/create-once ⇒ disk == buildFileSet,
+      // for thraksha AND developer files — the PART-1t anchor, exercised live). Non-circular: the
+      // before/after are compared to DISK bytes read back, not to the in-memory array.
+      const dirC = await mkTmp(); const dirP = await mkTmp();
+      let bytesExact = true;
+      try {
+        await applyPlan(dirC, curFiles);
+        await applyPlan(dirP, propFiles);
+        const diskC = await readTree(dirC);
+        const diskP = await readTree(dirP);
+        // anchor: buildFileSet == disk (both models).
+        for (const f of curFiles) if (diskC.get(f.relPath) !== f.content) bytesExact = false;
+        for (const f of propFiles) if (diskP.get(f.relPath) !== f.content) bytesExact = false;
+        // the preview's before/after ARE the real disk bytes, byte-for-byte, for every entry.
+        for (const e of preview.entries) {
+          if (e.before !== (diskC.get(e.file) ?? '')) bytesExact = false;
+          if (e.after !== (diskP.get(e.file) ?? '')) bytesExact = false;
+        }
+      } finally {
+        await fs.rm(dirC, { recursive: true, force: true });
+        await fs.rm(dirP, { recursive: true, force: true });
+      }
+
+      // ── (B) HASH-PRECHECK CORRECTNESS: the per-file-hash classification == brute-force content compare.
+      const common = [...curMap.keys()].filter((p) => propMap.has(p));
+      const bruteChange = common.filter((p) => curMap.get(p) !== propMap.get(p));
+      const bruteNoOp = common.filter((p) => curMap.get(p) === propMap.get(p));
+      const bruteAdd = [...propMap.keys()].filter((p) => !curMap.has(p));
+      const bruteDelete = [...curMap.keys()].filter((p) => !propMap.has(p));
+      const precheckOk =
+        eqSet(preview.change, bruteChange) && eqSet(preview.noOp, bruteNoOp) &&
+        eqSet(preview.add, bruteAdd) && eqSet(preview.delete, bruteDelete) &&
+        // fileHash agrees with byte-equality on every common file (no false/missed change).
+        common.every((p) => (fileHash({ relPath: p, content: curMap.get(p)!, ownership: 'thraksha' }) === fileHash({ relPath: p, content: propMap.get(p)!, ownership: 'thraksha' })) === (curMap.get(p) === propMap.get(p)));
+
+      record(bytesExact && precheckOk, `Map ${fx.name}: previewed before/after == REAL disk bytes (byte-for-byte); hash-precheck == brute-force content compare`,
+        `+${preview.add.length} ~${preview.change.length} -${preview.delete.length} =${preview.noOp.length}`);
+
+      // ── (C) APPLY FOR REAL (the regen narrative): materialize current, apply proposed onto it.
+      // applyPlan's buckets (thraksha) match the preview; developer files that differ are PROTECTED
+      // (ADR-002 — untouched), and 'delete' files are LEFT on disk (a file-set projection, not removed).
+      const thr = (action: ImpactAction) => preview.entries.filter((e) => e.action === action && e.ownership === 'thraksha').map((e) => e.file);
+      const dirR = await mkTmp();
+      let applyOk = true;
+      try {
+        await applyPlan(dirR, curFiles);           // materialize current for real
+        const real = await applyPlan(dirR, propFiles); // apply proposed FOR REAL
+        const diskAfter = await readTree(dirR);
+        // thraksha writer buckets == preview (developer creates/changes go to the developer buckets).
+        applyOk = eqSet(real.created, thr('add')) && eqSet(real.changed, thr('change')) && eqSet(real.unchanged, thr('no-op'));
+        // every thraksha add/change file on disk == the previewed AFTER, byte-for-byte.
+        for (const f of [...thr('add'), ...thr('change')]) if (diskAfter.get(f) !== preview.entries.find((e) => e.file === f)!.after) applyOk = false;
+        // developer files present in BOTH are PROTECTED (created once, then untouched — ADR-002).
+        const devBoth = [...propOwn].filter(([p, o]) => o === 'developer' && curOwn.get(p) === 'developer').map(([p]) => p);
+        if (!devBoth.every((p) => real.developerUntouched.includes(p))) applyOk = false;
+        // 'delete' (no longer emitted) files are LEFT on disk with the current bytes — NOT removed (ADR-002).
+        for (const f of preview.delete) if (diskAfter.get(f) !== curMap.get(f)) applyOk = false;
+      } finally {
+        await fs.rm(dirR, { recursive: true, force: true });
+      }
+      record(applyOk, `Map ${fx.name}: apply-for-real buckets match preview (thraksha); developer files protected + 'delete' left on disk (ADR-002)`);
+    }
+
+    // ── (D) DETERMINISM + purity: previewImpact is a pure function of the two models (twice-identical).
+    const c = mk({ entities: [ticket] }); const p = mk({ entities: [ticketPlus] });
+    const j1 = JSON.stringify(await previewImpact(c, p));
+    const j2 = JSON.stringify(await previewImpact(c, p));
+    record(j1 === j2, 'previewImpact twice-identical (a pure projection of two deterministic generations — the Map is truthful BECAUSE generation is deterministic)');
+
+    // ── (E) READ-ONLY: computing the preview emitted NOTHING into generation — the default demo is
+    // byte-identical to itself after a preview (the 103 baked above already prove no hash moved; this
+    // asserts the Map has no write-path into buildFileSet output).
+    const before = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' })));
+    void (await previewImpact(mk({ entities: [ticket] }), mk({ entities: [ticket, team] }))); // run the Map
+    const after = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' })));
+    record(before === after, 'READ-ONLY: running the Map emits nothing into generation (buildFileSet output byte-identical before/after a preview)');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
