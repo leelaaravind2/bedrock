@@ -25,6 +25,7 @@ import type { BackendPlugin, GeneratedFile } from './plugin.js';
 import { activeIntegrationLines } from './integrations.js';
 import { renderSlotsSection } from './slots.js';
 import { canonicalTokens, hasTokens } from '../figma/figma-ingest.js';
+import { renderCiWorkflow } from './cicd.js';
 
 // ---------------------------------------------------------------------------
 // The manifest (traceability, Law 12). Composed from agnostic model data plus
@@ -144,6 +145,20 @@ export async function buildFileSet(model: ProjectModel, plugin: BackendPlugin): 
       }),
     );
   });
+
+  // 2a) CI/CD workflow (Day 38 — a deterministic, gated artifact). When a provider is
+  //     declared, a `.github/workflows/ci.yml` is emitted: the core renders the provider
+  //     YAML shape + a FIXED pinned-action table (core/cicd.ts) from the plugin's NEUTRAL
+  //     ciProfile() facts + the blueprint version pins — so the pipeline runtime == the
+  //     Day-11 pin BY CONSTRUCTION and every action ref is pinned (never floating). The
+  //     DEFAULT ({ provider: 'none' }) ⇒ renderCiWorkflow returns null ⇒ nothing is pushed
+  //     ⇒ a literal bypass: the shell + the frozen backstop stay byte-identical. No timestamp,
+  //     no matrix, no secrets (deploy is a placeholder). Placed BEFORE the manifest so the
+  //     manifest lists it. Law 25: the core owns the CI format; the plugin owns the commands.
+  const ciFile = renderCiWorkflow(model.getCicd(), plugin.ciProfile?.(), model.getVersions());
+  if (ciFile) {
+    files.push({ relPath: ciFile.relPath, content: ciFile.content, ownership: 'thraksha' });
+  }
 
   // 3) The manifest lists every OTHER file; build it before appending itself.
   const manifest = buildManifest(model, files, plugin);

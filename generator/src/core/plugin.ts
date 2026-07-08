@@ -15,6 +15,7 @@
 
 import type { Entity, ProjectModel } from './project-model.js';
 import type { CodingStyle } from './style.js';
+import type { CiProfile } from './cicd.js';
 
 /**
  * One file the platform will write, plus who owns it (ADR-002). This is the
@@ -105,4 +106,14 @@ export interface BackendPlugin {
    * core does not know what formatting means for the plugin's language).
    */
   formatFiles?(files: GeneratedFile[], style: CodingStyle): GeneratedFile[];
+
+  /**
+   * Optional: the NEUTRAL CI facts for this stack (Day 38) — the setup action + the
+   * runtime version key + the build/test commands + the Dockerfile path. Returns NO
+   * YAML: the core renders the provider workflow (core/cicd.ts) from these facts + the
+   * blueprint version pins + a fixed pinned-action table (Law 25 — the core owns the
+   * provider format; the plugin owns the stack commands). Called only when the project
+   * declares a CI/CD provider; the default ('none') never calls it (a literal bypass).
+   */
+  ciProfile?(): CiProfile;
 }

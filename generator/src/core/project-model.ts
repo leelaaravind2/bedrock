@@ -29,6 +29,7 @@
 
 import { type CodingStyle, defaultCodingStyle } from './style.js';
 import { type Integrations, defaultIntegrations } from './integrations.js';
+import { type CiConfig, defaultCiConfig } from './cicd.js';
 import { type StackVersions, defaultVersionsFor } from './versions.js';
 import { type SlotDecl } from './slots.js';
 import { type DesignTokens } from '../figma/figma-ingest.js';
@@ -220,6 +221,14 @@ export interface ProjectState {
    * Non-empty ⇒ a canonical `design-tokens.json` artifact (round-trip deterministic). AI-free.
    */
   designTokens: DesignTokens;
+  /**
+   * The optional CI/CD config (Day 38). Default { provider: 'none' } is a literal
+   * bypass: buildFileSet emits no `.github/workflows/ci.yml`, so the shell + the frozen
+   * backstop stay byte-identical. 'github-actions' ⇒ a deterministic workflow whose
+   * runtime version is READ from the Day-11 version pin (versions[runtimeKey]) and
+   * whose action refs are all pinned (never floating). No timestamps, no matrix. AI-free.
+   */
+  cicd: CiConfig;
 }
 
 /** The Project Model API — the "map" the platform reads and updates. */
@@ -258,7 +267,11 @@ export interface ProjectModel {
   getDesignTokens(): DesignTokens;
   /** Set the ingested design tokens (Figma → the ingestion core → here; default {} = bypass). */
   setDesignTokens(tokens: DesignTokens): void;
-  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions + slots + designTokens. */
+  /** The optional CI/CD config (default { provider: 'none' } — a literal bypass) — Day 38. */
+  getCicd(): CiConfig;
+  /** Set the CI/CD config (a post-setup choice; default 'none' = bypass; ADR-003 deterministic). */
+  setCicd(cicd: CiConfig): void;
+  /** Read the whole current state: Phase-A settings + entities + defaults + style + integrations + description + versions + slots + designTokens + cicd. */
   getState(): ProjectState;
 }
 
@@ -475,7 +488,8 @@ export function createProjectModel(settings: PhaseASettingsInput): ProjectModel 
   // Description defaults to '' (a literal bypass) — supplied later via setDescription.
   // Slots default to [] (a literal bypass) — declared later via setSlots (Day 21).
   // Design tokens default to {} (a literal bypass) — ingested later via setDesignTokens (Day 31).
-  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions, [], {});
+  // CI/CD defaults to { provider: 'none' } (a literal bypass) — declared later via setCicd (Day 38).
+  return makeModel(phaseA, entities, defaultsApplied, defaultCodingStyle, defaultIntegrations, '', versions, [], {}, defaultCiConfig);
 }
 
 /**
@@ -493,6 +507,7 @@ function makeModel(
   initialVersions: StackVersions,
   initialSlots: SlotDecl[],
   initialDesignTokens: DesignTokens,
+  initialCicd: CiConfig,
 ): ProjectModel {
   // Held in the closure like Phase-A/entities. Default is a no-op style / no
   // integrations / blank description — each a literal bypass. Versions default to
@@ -505,6 +520,8 @@ function makeModel(
   let slots: SlotDecl[] = initialSlots.map((s) => ({ id: s.id, type: s.type }));
   // Design tokens default to {} (Day 31) — a literal bypass (buildFileSet emits no artifact).
   let designTokens: DesignTokens = { ...initialDesignTokens };
+  // CI/CD defaults to { provider: 'none' } (Day 38) — a literal bypass (no workflow emitted).
+  let cicd: CiConfig = { provider: initialCicd.provider };
   return {
     getPhaseASettings(): PhaseASettings {
       const copy: Record<string, unknown> = {};
@@ -632,6 +649,18 @@ function makeModel(
       designTokens = copy;
     },
 
+    getCicd(): CiConfig {
+      // A copy so callers cannot mutate state. Default { provider: 'none' } is the
+      // literal bypass (buildFileSet emits no workflow).
+      return { provider: cicd.provider };
+    },
+
+    setCicd(next: CiConfig): void {
+      // A post-setup deterministic choice. 'none' is the literal bypass; a declared
+      // provider ⇒ buildFileSet emits a deterministic workflow (pinned actions + the pin).
+      cicd = { provider: next.provider };
+    },
+
     getState(): ProjectState {
       return {
         phaseA: this.getPhaseASettings(),
@@ -643,6 +672,7 @@ function makeModel(
         versions: this.getVersions(),
         slots: this.getSlots(),
         designTokens: this.getDesignTokens(),
+        cicd: this.getCicd(),
       };
     },
   };
@@ -717,5 +747,10 @@ export function restoreProjectModel(state: ProjectSnapshot): ProjectModel {
   const designTokens: DesignTokens = state.designTokens && typeof state.designTokens === 'object'
     ? Object.fromEntries(Object.keys(state.designTokens).map((k) => [k, { type: state.designTokens[k].type, value: state.designTokens[k].value }]))
     : {};
-  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions, slots, designTokens);
+  // Snapshots that predate CI/CD (Day 38) have no `cicd` — default to { provider: 'none' }
+  // so those versions regenerate byte-for-byte (ADR-003). A declared provider is used verbatim.
+  const cicd: CiConfig = state.cicd && typeof state.cicd === 'object' && typeof state.cicd.provider === 'string'
+    ? { provider: state.cicd.provider }
+    : defaultCiConfig;
+  return makeModel(phaseA, entities, defaultsApplied, style, integrations, description, versions, slots, designTokens, cicd);
 }

@@ -491,6 +491,21 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
       return generateEntityFiles(entity, ctx);
     },
 
+    // Day 38: the neutral CI facts (the core renders the workflow). Java runtime (temurin);
+    // the pinned java version comes from getVersions().java (Day-11), read by the core. The
+    // build is under backend/ (the Maven project), so the docker context is backend/Dockerfile.
+    ciProfile() {
+      return {
+        runtimeKey: 'java' as const,
+        setupAction: 'actions/setup-java',
+        versionInput: 'java-version',
+        distribution: 'temurin',
+        buildCommands: ['mvn -B -f backend/pom.xml -DskipTests package'],
+        testCommands: ['mvn -B -f backend/pom.xml test'],
+        dockerfile: 'backend/Dockerfile',
+      };
+    },
+
     describeEntityDefaults(entity: Entity): string[] {
       return describeSpringEntityDefaults(entity);
     },

@@ -838,6 +838,20 @@ export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPl
         : generateEntityFiles(entity, ctx);
     },
 
+    // Day 38: the neutral CI facts (the core renders the workflow). Python runtime; the
+    // pinned python version comes from getVersions().python (Day-11), read by the core.
+    // No test suite ships, so `compileall` is the deterministic build-time smoke.
+    ciProfile() {
+      return {
+        runtimeKey: 'python' as const,
+        setupAction: 'actions/setup-python',
+        versionInput: 'python-version',
+        buildCommands: ['pip install -r requirements.txt'],
+        testCommands: ['python -m compileall app'],
+        dockerfile: 'Dockerfile',
+      };
+    },
+
     describeEntityDefaults(entity: Entity): string[] {
       return describePythonEntityDefaults(entity);
     },

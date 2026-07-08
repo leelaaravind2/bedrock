@@ -557,6 +557,19 @@ export function createGoPlugin(options: GoPluginOptions = {}): BackendPlugin {
       return generateEntityFiles(entity, ctx);
     },
 
+    // Day 38: the neutral CI facts (the core renders the workflow). Go runtime; the
+    // pinned go version comes from getVersions().go (Day-11), read by the core.
+    ciProfile() {
+      return {
+        runtimeKey: 'go' as const,
+        setupAction: 'actions/setup-go',
+        versionInput: 'go-version',
+        buildCommands: ['go build ./...'],
+        testCommands: ['go test ./...'],
+        dockerfile: 'Dockerfile',
+      };
+    },
+
     describeEntityDefaults(entity: Entity): string[] {
       return describeGoEntityDefaults(entity);
     },

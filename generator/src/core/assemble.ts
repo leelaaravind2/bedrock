@@ -45,6 +45,7 @@ import { type Integrations } from './integrations.js';
 import { type StackVersions, resolveVersions } from './versions.js';
 import { type SlotDecl } from './slots.js';
 import { type DesignTokens } from '../figma/figma-ingest.js';
+import { type CiConfig } from './cicd.js';
 
 /**
  * The canonical, JSON-serialisable choices the wizard collects and the CLI passes.
@@ -66,6 +67,8 @@ export interface BlueprintChoices {
   slots?: SlotDecl[];
   /** Optional ingested Figma design tokens (default {} — a bypass; Day 31). */
   designTokens?: DesignTokens;
+  /** Optional CI/CD config (default { provider: 'none' } — a bypass; Day 38). */
+  cicd?: CiConfig;
   /** Entities in order (a belongs-to target must be defined earlier — the model checks). */
   entities?: EntitySpec[];
 }
@@ -102,6 +105,10 @@ export function assembleBlueprint(choices: BlueprintChoices): ProjectModel {
   // no design-tokens.json ⇒ a literal bypass. The CONCRETE tokens (from the pure ingestion
   // core) ride the SAME canonical seam ⇒ round-trip/UI==CLI determinism is structural.
   if (choices.designTokens && Object.keys(choices.designTokens).length > 0) model.setDesignTokens(choices.designTokens);
+  // CI/CD (Day 38): declared only when supplied with a non-'none' provider. Omitted / 'none' ⇒
+  // no workflow ⇒ a literal bypass (byte-identical frozen output). A declared provider rides the
+  // SAME canonical seam ⇒ round-trip/UI==CLI determinism is structural.
+  if (choices.cicd && choices.cicd.provider !== 'none') model.setCicd(choices.cicd);
 
   for (const spec of choices.entities ?? []) model.addEntity(spec);
 

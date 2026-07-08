@@ -1019,6 +1019,19 @@ export function createExpressPlugin(options: ExpressPluginOptions = {}): Backend
         : generateEntityFiles(entity, ctx);
     },
 
+    // Day 38: the neutral CI facts (the core renders the workflow). Node runtime; the
+    // pinned node version comes from getVersions().node (Day-11), read by the core.
+    ciProfile() {
+      return {
+        runtimeKey: 'node' as const,
+        setupAction: 'actions/setup-node',
+        versionInput: 'node-version',
+        buildCommands: ['npm install'],
+        testCommands: ['npm test --if-present'],
+        dockerfile: 'Dockerfile',
+      };
+    },
+
     describeEntityDefaults(entity: Entity): string[] {
       return describeExpressEntityDefaults(entity);
     },

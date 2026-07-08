@@ -1207,6 +1207,80 @@ async function main(): Promise<void> {
     }
   }
 
+  // ══ PART 1s — CI/CD pipeline generation (Eco-Day 38) ════════════════════════
+  // A gated `cicd` field → a deterministic GitHub Actions workflow per stack: pinned
+  // action refs + a runtime version READ from the Day-11 blueprint pin. The load-bearing
+  // property is version-match-and-pinned (never floating/timestamp/matrix). Determinism is
+  // a STRING property — provable for all 5 stacks with no toolchain (the artifact is YAML).
+  process.stdout.write('\n=== PART 1s: CI/CD pipeline generation — GitHub Actions × 5 stacks (Eco-Day 38) ===\n');
+  {
+    const CI: Record<string, string> = {
+      Express: '1fd429163a1b74c98cab0f8999bfc97e384fd38a7fead57e7acb77d906bce9c1',
+      Go: '375f197d5b631c88a0025d370d8b5a4f76e503cfabf4e8cc2a56b0bdf30ef975',
+      FastAPI: 'd02f3c836fea2cd4330eea02d8d73ea57b09d178f7c48192224e086bd7f92a13',
+      Django: '3633722d0e3eb8453ff27d9597554560883519d1360949f3bcf3452f47cfbeb6',
+      'Spring Boot': 'd178c3aa65ada8f965fb776aca456333c5f974ee8074b0499714a9c3cc538c1f',
+    };
+    // The runtime version key + default pin per stack (== DEFAULT_VERSIONS, Day 11).
+    const RUNTIME: Record<string, { key: string; pin: string; input: string }> = {
+      Express: { key: 'node', pin: '22', input: 'node-version' },
+      Go: { key: 'go', pin: '1.22', input: 'go-version' },
+      FastAPI: { key: 'python', pin: '3.12', input: 'python-version' },
+      Django: { key: 'python', pin: '3.12', input: 'python-version' },
+      'Spring Boot': { key: 'java', pin: '21', input: 'java-version' },
+    };
+    const ciModel = (backend: string): ProjectModel => {
+      const m = buildDemoAppModel({ backend, database: 'PostgreSQL' });
+      m.setCicd({ provider: 'github-actions' });
+      return m;
+    };
+    const ciYamlOf = (files: GeneratedFile[]): string => files.find((f) => f.relPath === '.github/workflows/ci.yml')?.content ?? '';
+
+    for (const backend of BACKENDS) {
+      const rt = RUNTIME[backend];
+      const a = await filesOf(ciModel(backend));
+      const b = await filesOf(ciModel(backend));
+      const yaml = ciYamlOf(a);
+      bake(`cicd|${backend}`, hashFiles(a));
+
+      // (a) twice-identical == recorded additive baseline; the workflow exists.
+      const twice = hashFiles(a) === hashFiles(b) && hashFiles(a) === CI[backend] && yaml.length > 0;
+
+      // (b) VERSION-MATCH: the setup version == the blueprint pin (getVersions()[key]).
+      const pin = ciModel(backend).getVersions()[rt.key];
+      const versionMatch = pin === rt.pin && yaml.includes(`${rt.input}: '${pin}'`);
+
+      // (c) PINNED + NO-FLOATING: every `uses:` ref is a pinned @vN (or SHA); no @latest/@main.
+      const uses = [...yaml.matchAll(/uses: (\S+)/g)].map((m) => m[1]);
+      const allPinned = uses.length > 0 && uses.every((u) => /@(v\d+|[0-9a-f]{40})$/.test(u)) && !/@latest|@main|@master/.test(yaml);
+
+      // (d) NO timestamp/run-id/date; NO matrix (the CI-specific killers).
+      const noTimestamp = !/\d{4}-\d{2}-\d{2}|github\.run_id|github\.run_number|\bDate\(/.test(yaml);
+      const noMatrix = !/^\s*matrix:/m.test(yaml);
+
+      record(twice && versionMatch && allPinned && noTimestamp && noMatrix,
+        `${backend.padEnd(11)} CI twice-identical == baseline; runtime == blueprint pin (${rt.key} ${rt.pin}); actions pinned; no floating/timestamp/matrix`,
+        hashFiles(a).slice(0, 16));
+    }
+
+    // (e) VERSION-MATCH tracks a NON-DEFAULT pin: setVersions(node:20) ⇒ the workflow's
+    // node-version becomes '20' (the pipeline follows the pin, not a hardcoded value).
+    {
+      const m = buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' });
+      m.setCicd({ provider: 'github-actions' });
+      m.setVersions(resolveVersions('Express', { node: '20' }));
+      const yaml = ciYamlOf(await filesOf(m));
+      record(yaml.includes(`node-version: '20'`) && !yaml.includes(`node-version: '22'`),
+        'CI version-match tracks a NON-DEFAULT pin: setVersions(node:20) → workflow node-version 20 (follows the pin)');
+    }
+
+    // (f) DEFAULT = LITERAL BYPASS: no cicd (provider 'none') ⇒ NO .github/workflows/ci.yml
+    //     (the artifact is additive; its absence keeps the frozen backstop byte-identical).
+    const noCi = await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }));
+    record(!noCi.some((f) => f.relPath === '.github/workflows/ci.yml'),
+      'default (no CI/CD) → NO .github/workflows/ci.yml artifact (additive; frozen backstop byte-identical)');
+  }
+
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
   process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);
