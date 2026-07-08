@@ -1,29 +1,24 @@
-// Thraksha desktop shell (ships as "Bedrock") — the front-end THIN CLIENT (Eco-Day 55).
+// Bedrock desktop shell — the front-end THIN CLIENT (Eco-Day 55; wizard Eco-Day 61).
 //
-// It CALLS the 5 Day-52 Tauri commands via the GLOBAL window.__TAURI__.core.invoke
-// (tauri.conf.json has withGlobalTauri: true, and there is NO bundler — frontendDist is
-// raw ../src — so we use the injected global, NOT an `import` from @tauri-apps/api) and
-// RENDERS the Day-53 SidecarResult. It is a THIN CLIENT: no generation logic in JS, no
-// parsing/transforming of generator output — stdout is rendered VERBATIM. The certified
-// generator (invoked through the thin-invoker commands) is the only source of truth.
+// A GUIDED WIZARD collects BlueprintChoices and drives the EXISTING export_project command
+// (via the certified --model path → readModelArg → assembleBlueprint, the Day-16 seam). It
+// is a THIN CLIENT: no generation logic in JS. buildBlueprintChoices (wizard-choices.mjs)
+// is a pure field→JSON serializer; the certified Node engine does all generation.
 //
-// The Day-53 SidecarResult contract { stdout, stderr, exit_code } (snake_case on the wire —
-// the Rust struct has no rename_all, so JS reads result.exit_code):
-//   - a REJECTED promise  → an ENVIRONMENT failure ONLY (sidecar missing/broken). NOT a finding.
-//   - a RESOLVED value    → a COMPLETED run as DATA; read exit_code:
-//       * 0            → clean / success (stdout shown).
-//       * 1 on a scan  → CERTAIN findings — rendered AS RESULTS, never an error (gap #6's point).
-//       * other ≠ 0    → informational (e.g. export usage exit 2) — stdout + stderr shown.
+// No bundler (frontendDist is raw ../src) → the global window.__TAURI__.core.invoke, NOT an
+// npm import. This file is an ES module so it can import the pure serializer that Node also
+// imports for the headless UI==CLI proof. Invoke args are camelCase (Tauri v2 default).
 //
-// Command-arg casing: the commands carry no #[command(rename_all)], so Tauri v2's default
-// (rename_all = "camelCase") applies — JS passes camelCase keys (targetDir, projectDir),
-// mapped to the Rust snake_case params. Empty optional fields are OMITTED so the command
-// takes its literal-bypass demo path (Day-52), not an empty-string arg.
+// SidecarResult (Day 53) { stdout, stderr, exit_code }: a rejected promise = an environment
+// failure ONLY; a resolved value = a completed run as DATA (exit_code 0 = clean; 1 on a scan
+// = CERTAIN findings, results not an error; other = informational).
+
+import { buildBlueprintChoices, TEMPLATES, STEPS } from './wizard-choices.js';
 
 function tauriInvoke() {
   const t = window.__TAURI__;
   if (t && t.core && typeof t.core.invoke === 'function') return t.core.invoke;
-  return null; // running outside the Tauri WebView (e.g. a plain browser) — no backend.
+  return null; // outside the Tauri WebView (e.g. a plain browser) — no backend.
 }
 
 function setOutput(kind, title, body) {
@@ -31,13 +26,104 @@ function setOutput(kind, title, body) {
   out.className = kind;
   out.textContent = `[${title}]\n\n${body && body.length ? body : '(no output)'}`;
 }
+function setStatus(text) { document.getElementById('status').textContent = text; }
 
-function setStatus(text) {
-  document.getElementById('status').textContent = text;
+// ─── The wizard ────────────────────────────────────────────────────────────────────────
+// The collected selections (defaults = the Blank template's values; edited step by step).
+const selections = { ...TEMPLATES[0].sel };
+let stepIndex = 0; // 0..STEPS.length-1 are field steps; STEPS.length is the Review step.
+
+function applyTemplate(sel) {
+  Object.assign(selections, sel);
+  stepIndex = 0;
+  renderStep();
+  setStatus(`Template loaded: ${selections.projectName} (${selections.projectType} · ${selections.backend}). Edit any step, then Generate.`);
 }
 
-// Read an optional input by element id; '' / whitespace ⇒ undefined (the key is dropped
-// from the invoke payload, so the Rust Option is None ⇒ the command's demo bypass).
+function renderStep() {
+  const body = document.getElementById('wizard-body');
+  const back = document.getElementById('wizard-back');
+  const next = document.getElementById('wizard-next');
+  const progress = document.getElementById('wizard-progress');
+  const onReview = stepIndex >= STEPS.length;
+
+  back.disabled = stepIndex === 0;
+  progress.textContent = onReview
+    ? `Review — step ${STEPS.length + 1} of ${STEPS.length + 1}`
+    : `Step ${stepIndex + 1} of ${STEPS.length + 1}: ${STEPS[stepIndex].label}`;
+
+  if (!onReview) {
+    next.textContent = 'Next';
+    const step = STEPS[stepIndex];
+    const cur = selections[step.id];
+    if (step.kind === 'text') {
+      body.innerHTML = `<label>${step.label}</label><input id="field" value="${escapeAttr(cur)}" />`;
+    } else {
+      const opts = step.options.map((o) => `<option value="${escapeAttr(o)}"${o === cur ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
+      body.innerHTML = `<label>${step.label}</label><select id="field">${opts}</select>`;
+    }
+    return;
+  }
+
+  // Review step: the assembled BlueprintChoices + a target-dir + Generate.
+  next.textContent = 'Generate ▸';
+  const choices = buildBlueprintChoices(selections);
+  const rows = Object.entries(choices.settings)
+    .map(([k, v]) => `<div class="review-row"><span>${escapeHtml(k)}</span><span>${escapeHtml(String(v))}</span></div>`)
+    .join('');
+  body.innerHTML =
+    rows +
+    `<pre class="choices" id="choices-json">${escapeHtml(JSON.stringify(choices, null, 2))}</pre>` +
+    `<label>Export to folder</label><input id="target-dir" placeholder="C:\\path\\to\\output" />` +
+    `<p style="font-size:0.72rem;opacity:0.6;margin:0.4rem 0 0">Settings-only project shell (entities & fields arrive next). Generation is deterministic — same choices, same code.</p>`;
+}
+
+function captureCurrentStep() {
+  if (stepIndex >= STEPS.length) return;
+  const el = document.getElementById('field');
+  if (!el) return;
+  const step = STEPS[stepIndex];
+  let v = el.value;
+  if (step.id === 'projectName') v = v.trim() || 'MyApp';
+  selections[step.id] = v;
+}
+
+async function generate() {
+  const invoke = tauriInvoke();
+  const dir = (document.getElementById('target-dir') || {}).value;
+  const targetDir = dir ? dir.trim() : '';
+  if (!targetDir) { setStatus('Enter an export folder before generating.'); return; }
+  const choices = buildBlueprintChoices(selections);
+  if (!invoke) {
+    setStatus('not running inside Bedrock');
+    setOutput('env-error', 'no Tauri backend',
+      'window.__TAURI__.core.invoke is unavailable — open inside the Bedrock window to generate. (The assembled BlueprintChoices is shown above.)');
+    return;
+  }
+  setStatus(`Generating ${selections.projectName}…`);
+  try {
+    // The wizard is just another producer of --model: the SAME certified export path.
+    const r = await invoke('export_project', { targetDir, model: JSON.stringify(choices) });
+    renderResult('export_project', r);
+  } catch (err) {
+    setStatus('export: environment error');
+    setOutput('env-error', 'export_project — environment problem (sidecar missing/broken)', String(err));
+  }
+}
+
+function wizardNext() {
+  captureCurrentStep();
+  if (stepIndex >= STEPS.length) { generate(); return; }
+  stepIndex += 1;
+  renderStep();
+}
+function wizardBack() {
+  captureCurrentStep();
+  if (stepIndex > 0) stepIndex -= 1;
+  renderStep();
+}
+
+// ─── The Advanced harness (raw commands — unchanged behavior) ────────────────────────────
 function optValue(id) {
   if (!id) return undefined;
   const el = document.getElementById(id);
@@ -45,74 +131,75 @@ function optValue(id) {
   const v = el.value.trim();
   return v === '' ? undefined : v;
 }
-
-// Build the invoke args object from a button's data-* attributes. camelCase keys per the
-// Tauri v2 default. Required fields (targetDir, projectDir) are validated by the caller.
 function buildArgs(btn) {
   const args = {};
   if (btn.dataset.targetdir)  args.targetDir  = optValue(btn.dataset.targetdir);
   if (btn.dataset.projectdir) args.projectDir = optValue(btn.dataset.projectdir);
   if (btn.dataset.backend)    args.backend    = optValue(btn.dataset.backend);
   if (btn.dataset.model)      args.model      = optValue(btn.dataset.model);
-  // Drop undefined keys so omitted optionals become Rust None (the literal bypass).
   for (const k of Object.keys(args)) if (args[k] === undefined) delete args[k];
   return args;
 }
-
+function renderResult(cmd, r) {
+  const code = r.exit_code;
+  setStatus(`${cmd}: completed (exit ${code})`);
+  if (code === 0) {
+    setOutput('clean', `${cmd} — OK (exit 0)`, r.stdout);
+  } else if (code === 1 && cmd === 'scan_project') {
+    setOutput('findings', `${cmd} — CERTAIN findings (exit 1) · review required`, r.stdout && r.stdout.length ? r.stdout : r.stderr);
+  } else {
+    const body = [r.stdout, r.stderr].filter((s) => s && s.length).join('\n---\n');
+    setOutput('info', `${cmd} — completed (exit ${code})`, body);
+  }
+}
 async function runCommand(btn) {
   const cmd = btn.dataset.cmd;
   const invoke = tauriInvoke();
   if (!invoke) {
     setStatus('not running inside Bedrock');
-    setOutput('env-error', 'no Tauri backend',
-      'window.__TAURI__.core.invoke is unavailable — this page is not running inside the Bedrock WebView, so no command can be invoked.');
+    setOutput('env-error', 'no Tauri backend', 'window.__TAURI__.core.invoke is unavailable — open inside the Bedrock WebView to run commands.');
     return;
   }
-
   const args = buildArgs(btn);
-
-  // Required-field guards (the command would error, but a clear UI message is friendlier).
-  if (cmd === 'export_project' && !args.targetDir) {
-    setStatus('export: missing target directory');
-    setOutput('info', 'export — input needed', 'Enter a target directory before running export.');
-    return;
-  }
-  if (cmd === 'scan_project' && !args.projectDir) {
-    setStatus('scan: missing project directory');
-    setOutput('info', 'scan — input needed', 'Enter a project directory before running the scan.');
-    return;
-  }
-
+  if (cmd === 'export_project' && !args.targetDir) { setStatus('export: missing target directory'); setOutput('info', 'export — input needed', 'Enter a target directory.'); return; }
+  if (cmd === 'scan_project' && !args.projectDir) { setStatus('scan: missing project directory'); setOutput('info', 'scan — input needed', 'Enter a project directory.'); return; }
   setStatus(`running ${cmd}…`);
   try {
-    // Resolves for ANY completed run (Day-53). Rejects ONLY on a spawn/environment failure.
     const r = await invoke(cmd, args);
-    const code = r.exit_code;
-    setStatus(`${cmd}: completed (exit ${code})`);
-
-    if (code === 0) {
-      setOutput('clean', `${cmd} — OK (exit 0)`, r.stdout);
-    } else if (code === 1 && cmd === 'scan_project') {
-      // The deterministic gate WORKING: CERTAIN findings on stdout. Results, NOT an error.
-      setOutput('findings', `${cmd} — CERTAIN findings (exit 1) · review required`,
-        r.stdout && r.stdout.length ? r.stdout : r.stderr);
-    } else {
-      // Other completed non-zero (e.g. export usage exit 2) — informational, not a crash.
-      const body = [r.stdout, r.stderr].filter((s) => s && s.length).join('\n---\n');
-      setOutput('info', `${cmd} — completed (exit ${code})`, body);
-    }
+    renderResult(cmd, r);
   } catch (err) {
-    // A rejected promise = an ENVIRONMENT problem ONLY (Day-53: Err is spawn/env failure).
     setStatus(`${cmd}: environment error`);
     setOutput('env-error', `${cmd} — environment problem (sidecar missing/broken)`, String(err));
   }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
+// ─── helpers ─────────────────────────────────────────────────────────────────────────────
+function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+function escapeAttr(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// ─── init ────────────────────────────────────────────────────────────────────────────────
+function init() {
+  // Templates
+  const tpl = document.getElementById('templates');
+  for (const t of TEMPLATES) {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = t.label;
+    b.addEventListener('click', () => applyTemplate(t.sel));
+    tpl.appendChild(b);
+  }
+  // Wizard nav
+  document.getElementById('wizard-next').addEventListener('click', wizardNext);
+  document.getElementById('wizard-back').addEventListener('click', wizardBack);
+  renderStep();
+  // Advanced harness
   for (const btn of document.querySelectorAll('button[data-cmd]')) {
     btn.addEventListener('click', () => runCommand(btn));
   }
   if (!tauriInvoke()) {
-    setStatus('note: Tauri backend not detected (open inside Bedrock to run commands).');
+    setStatus('note: Tauri backend not detected (open inside Bedrock to generate). The wizard + the assembled BlueprintChoices still work.');
   }
-});
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();

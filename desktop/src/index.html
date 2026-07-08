@@ -11,16 +11,30 @@
       header { padding: 0.75rem 1rem; border-bottom: 1px solid #8883; }
       header h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.02em; }
       header p { margin: 0.15rem 0 0; font-size: 0.8rem; opacity: 0.7; }
-      main { display: grid; grid-template-columns: 320px 1fr; gap: 0; height: calc(100% - 4rem); }
-      .panels { overflow-y: auto; padding: 0.75rem; border-right: 1px solid #8883; }
-      .panel { border: 1px solid #8883; border-radius: 8px; padding: 0.6rem; margin-bottom: 0.6rem; }
-      .panel h2 { margin: 0 0 0.4rem; font-size: 0.9rem; }
-      .panel label { display: block; font-size: 0.72rem; opacity: 0.75; margin: 0.3rem 0 0.1rem; }
-      .panel input, .panel textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 0.78rem; padding: 0.3rem; border: 1px solid #8885; border-radius: 5px; background: #fff8; }
-      @media (prefers-color-scheme: dark) { .panel input, .panel textarea { background: #0f0f0f66; color: #eee; } }
-      .panel textarea { resize: vertical; min-height: 2.2rem; }
-      button { margin-top: 0.5rem; cursor: pointer; padding: 0.35rem 0.9rem; font-size: 0.82rem; border: 1px solid #396cd8; border-radius: 6px; background: #396cd8; color: #fff; }
+      main { display: grid; grid-template-columns: 360px 1fr; gap: 0; height: calc(100% - 4rem); }
+      .left { overflow-y: auto; padding: 0.75rem; border-right: 1px solid #8883; }
+      .card { border: 1px solid #8883; border-radius: 8px; padding: 0.7rem; margin-bottom: 0.7rem; }
+      .card h2 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+      label { display: block; font-size: 0.72rem; opacity: 0.75; margin: 0.4rem 0 0.15rem; }
+      input, select, textarea { width: 100%; box-sizing: border-box; font-size: 0.82rem; padding: 0.35rem; border: 1px solid #8885; border-radius: 5px; background: #fff8; color: inherit; }
+      @media (prefers-color-scheme: dark) { input, select, textarea { background: #0f0f0f66; color: #eee; } }
+      textarea { font-family: ui-monospace, monospace; resize: vertical; min-height: 2.2rem; }
+      button { cursor: pointer; padding: 0.35rem 0.9rem; font-size: 0.82rem; border: 1px solid #396cd8; border-radius: 6px; background: #396cd8; color: #fff; }
       button:hover { background: #2f5bc0; }
+      button.ghost { background: transparent; color: #396cd8; }
+      button.ghost:hover { background: #396cd814; }
+      button:disabled { opacity: 0.4; cursor: default; }
+      .templates { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+      .templates button { font-size: 0.75rem; padding: 0.25rem 0.6rem; }
+      .wizard-nav { display: flex; justify-content: space-between; margin-top: 0.7rem; }
+      .progress { font-size: 0.72rem; opacity: 0.6; margin-bottom: 0.5rem; }
+      .review-row { display: flex; justify-content: space-between; font-size: 0.78rem; padding: 0.15rem 0; border-bottom: 1px solid #8882; }
+      .review-row span:last-child { font-weight: 600; }
+      pre.choices { font-family: ui-monospace, monospace; font-size: 0.72rem; background: #8881; border-radius: 6px; padding: 0.5rem; overflow-x: auto; margin: 0.5rem 0; }
+      details.advanced { margin-top: 0.5rem; }
+      details.advanced summary { cursor: pointer; font-size: 0.82rem; opacity: 0.8; padding: 0.3rem 0; }
+      .panel { border: 1px solid #8883; border-radius: 8px; padding: 0.6rem; margin: 0.5rem 0; }
+      .panel h3 { margin: 0 0 0.3rem; font-size: 0.82rem; }
       .results { padding: 0.75rem; overflow: auto; }
       #status { font-size: 0.78rem; opacity: 0.7; margin: 0 0 0.5rem; }
       #output { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 0.78rem; padding: 0.7rem; border-radius: 8px; border: 1px solid #8883; min-height: 60%; }
@@ -33,58 +47,76 @@
   <body>
     <header>
       <h1>Bedrock</h1>
-      <p>Deterministic app generator — a thin client over the certified generator sidecar.</p>
+      <p>Describe your app; get exact, reproducible code — no AI in the generation path.</p>
     </header>
     <main>
-      <section class="panels">
-        <div class="panel">
-          <h2>Detect toolchains</h2>
-          <button data-cmd="detect_toolchains">Run detect</button>
+      <section class="left">
+        <!-- Templates: pre-filled starting points (pure data — editable). -->
+        <div class="card">
+          <h2>Start from a template</h2>
+          <div class="templates" id="templates"><!-- template buttons injected --></div>
         </div>
 
-        <div class="panel">
-          <h2>Flow map</h2>
-          <label>backend (optional — blank ⇒ demo)</label>
-          <input id="flow-backend" placeholder="Express" />
-          <label>model JSON / path (optional)</label>
-          <textarea id="flow-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
-          <button data-cmd="flow_map" data-backend="flow-backend" data-model="flow-model">Run flow map</button>
+        <!-- The guided wizard: name → project type → backend → frontend → database → auth → review. -->
+        <div class="card">
+          <h2>New project</h2>
+          <div class="progress" id="wizard-progress"></div>
+          <div id="wizard-body"><!-- the current step's control injected --></div>
+          <div class="wizard-nav">
+            <button class="ghost" id="wizard-back">Back</button>
+            <button id="wizard-next">Next</button>
+          </div>
         </div>
 
-        <div class="panel">
-          <h2>Impact preview</h2>
-          <label>backend (optional)</label>
-          <input id="impact-backend" placeholder="Express" />
-          <label>model JSON / path (optional — { current, proposed })</label>
-          <textarea id="impact-model" placeholder='{ "current": {…}, "proposed": {…} }'></textarea>
-          <button data-cmd="impact_preview" data-backend="impact-backend" data-model="impact-model">Run impact preview</button>
-        </div>
+        <!-- Advanced: the raw command harness (scan / flow-map / impact / detect + raw --model). -->
+        <details class="advanced">
+          <summary>Advanced — raw commands</summary>
 
-        <div class="panel">
-          <h2>Scan (deterministic + advisory)</h2>
-          <label>project directory</label>
-          <input id="scan-dir" placeholder="C:\\path\\to\\project" />
-          <button data-cmd="scan_project" data-projectdir="scan-dir">Run scan</button>
-        </div>
-
-        <div class="panel">
-          <h2>Export standalone project</h2>
-          <label>target directory</label>
-          <input id="export-dir" placeholder="C:\\path\\to\\output" />
-          <label>backend (optional)</label>
-          <input id="export-backend" placeholder="Express" />
-          <label>model JSON / path (optional)</label>
-          <textarea id="export-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
-          <button data-cmd="export_project" data-targetdir="export-dir" data-backend="export-backend" data-model="export-model">Run export</button>
-        </div>
+          <div class="panel">
+            <h3>Detect toolchains</h3>
+            <button data-cmd="detect_toolchains">Run detect</button>
+          </div>
+          <div class="panel">
+            <h3>Flow map</h3>
+            <label>backend (optional — blank ⇒ demo)</label>
+            <input id="flow-backend" placeholder="Express" />
+            <label>model JSON / path (optional)</label>
+            <textarea id="flow-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
+            <button data-cmd="flow_map" data-backend="flow-backend" data-model="flow-model">Run flow map</button>
+          </div>
+          <div class="panel">
+            <h3>Impact preview</h3>
+            <label>backend (optional)</label>
+            <input id="impact-backend" placeholder="Express" />
+            <label>model JSON / path (optional — { current, proposed })</label>
+            <textarea id="impact-model" placeholder='{ "current": {…}, "proposed": {…} }'></textarea>
+            <button data-cmd="impact_preview" data-backend="impact-backend" data-model="impact-model">Run impact preview</button>
+          </div>
+          <div class="panel">
+            <h3>Scan (deterministic + advisory)</h3>
+            <label>project directory</label>
+            <input id="scan-dir" placeholder="C:\\path\\to\\project" />
+            <button data-cmd="scan_project" data-projectdir="scan-dir">Run scan</button>
+          </div>
+          <div class="panel">
+            <h3>Export (raw model)</h3>
+            <label>target directory</label>
+            <input id="export-dir" placeholder="C:\\path\\to\\output" />
+            <label>backend (optional)</label>
+            <input id="export-backend" placeholder="Express" />
+            <label>model JSON / path (optional)</label>
+            <textarea id="export-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
+            <button data-cmd="export_project" data-targetdir="export-dir" data-backend="export-backend" data-model="export-model">Run export</button>
+          </div>
+        </details>
       </section>
 
       <section class="results">
-        <p id="status">Ready. Results render below; a rejected call = an environment problem, a completed run (any exit code) = data.</p>
-        <pre id="output" class="info">No command run yet.</pre>
+        <p id="status">Fill the wizard (or pick a template), then Generate. A rejected call = an environment problem; a completed run (any exit code) = data.</p>
+        <pre id="output" class="info">No project generated yet.</pre>
       </section>
     </main>
 
-    <script src="./main.js" defer></script>
+    <script type="module" src="./main.js"></script>
   </body>
 </html>
