@@ -30,7 +30,8 @@
     "bench:phase1": "node dist/phase1-benchmark.js",
     "bench:phase2": "node dist/phase2-benchmark.js",
     "fill": "node dist/fill-demo.js",
-    "ui": "node dist/server.js"
+    "ui": "node dist/server.js",
+    "bench:phase3": "node dist/phase3-benchmark.js"
   },
   "devDependencies": {
     "@types/node": "22.20.0",
