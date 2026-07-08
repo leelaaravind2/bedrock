@@ -22,8 +22,11 @@ import { postgresProvider } from '../database/postgres.js';
 import {
   generateEntityFiles,
   generateWorkerEntityFiles,
+  generateCliEntityFiles,
+  generateGraphqlEntityFiles,
   describeEntityDefaults as describeDjangoEntityDefaults,
 } from './entity-codegen.js';
+import { buildCanonicalSdl } from '../../core/graphql-sdl.js';
 
 // This file compiles to dist/plugins/django/django-plugin.js; its templates live
 // at generator/plugins/django/templates (three levels up from dist/), so every
@@ -332,6 +335,104 @@ export interface DjangoPluginOptions {
   database?: DatabaseProvider;
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2). CLI = a Django management command per
+// entity (`python manage.py <entity> <op>` — the idiomatic Django CLI; no dep, no
+// root shell file). GraphQL = one /graphql view over the SHARED deterministic
+// schema.graphql using ariadne (a GATED requirements dep). A LITERAL BYPASS
+// otherwise. Generation-only. The Django web scaffolding is retained (the ORM needs it).
+// ---------------------------------------------------------------------------
+
+/** The GraphQL app (graphql_app.py): schema over the shared SDL + a /graphql Django view (ariadne). */
+const GRAPHQL_APP_PY = [
+  `"""The GraphQL app: one schema over the deterministic SDL (schema.graphql) using`,
+  `ariadne, plus a Django view. Reuses the domain layer; there are no REST views. The`,
+  `resolvers are auto-discovered from entities/<name>/graphql.py (sorted, deterministic)."""`,
+  `import importlib`,
+  `import json`,
+  `import os`,
+  `from pathlib import Path`,
+  ``,
+  `from ariadne import MutationType, QueryType, graphql_sync, make_executable_schema`,
+  `from django.http import JsonResponse`,
+  `from django.views.decorators.csrf import csrf_exempt`,
+  ``,
+  `BASE_DIR = Path(__file__).resolve().parent`,
+  ``,
+  `query = QueryType()`,
+  `mutation = MutationType()`,
+  ``,
+  ``,
+  `def _register_all():`,
+  `    entities_dir = BASE_DIR / "entities"`,
+  `    if entities_dir.is_dir():`,
+  `        for name in sorted(os.listdir(entities_dir)):`,
+  `            if (entities_dir / name / "graphql.py").is_file():`,
+  `                module = importlib.import_module(f"entities.{name}.graphql")`,
+  `                module.register(query, mutation)`,
+  ``,
+  ``,
+  `_register_all()`,
+  ``,
+  `with open(BASE_DIR / "schema.graphql", encoding="utf-8") as _f:`,
+  `    schema = make_executable_schema(_f.read(), query, mutation)`,
+  ``,
+  ``,
+  `@csrf_exempt`,
+  `def graphql_view(request):`,
+  `    data = json.loads(request.body or "{}")`,
+  `    ok, result = graphql_sync(schema, data, context_value={"request": request})`,
+  `    return JsonResponse(result, status=200 if ok else 400)`,
+  ``,
+].join('\n');
+
+/** Add ariadne to requirements.txt (GraphQL only) — a gated GENERATED-PROJECT dep. */
+function addAriadneRequire(raw: string): string {
+  return raw.trimEnd() + '\n' + 'ariadne==0.23.0\n';
+}
+
+/** Mount the /graphql view on config/urls.py (GraphQL only) — appended, deterministic. */
+function addGraphqlUrl(raw: string): string {
+  return raw.trimEnd() + '\n' + [
+    ``,
+    `# Day-36 GraphQL endpoint — one /graphql view over the deterministic schema.`,
+    `from graphql_app import graphql_view  # noqa: E402`,
+    ``,
+    `urlpatterns.append(path("graphql/", graphql_view))`,
+    ``,
+  ].join('\n');
+}
+
+/** Append a truthful CLI/GraphQL section to the Django README. */
+function addEndpointReadmeDj(raw: string, kind: 'cli' | 'graphql'): string {
+  const lines =
+    kind === 'cli'
+      ? [
+          ``,
+          `## CLI (project type: CLI)`,
+          ``,
+          `This is a **command-line tool**, not a web server: each entity ships a Django`,
+          `**management command**, so \`python manage.py <entity> <op> [--id N] [--json '{...}']\``,
+          `runs CRUD over the SAME serializer + ORM model the HTTP API uses — **no dependency**`,
+          `(Django's built-in command framework). Apply migrations first with`,
+          `\`python manage.py migrate\`. Example: \`python manage.py ticket list\`.`,
+          ``,
+        ]
+      : [
+          ``,
+          `## GraphQL API (project type: GraphQL API)`,
+          ``,
+          `This exposes **one GraphQL endpoint**, \`/graphql\`, instead of the REST routes.`,
+          `\`schema.graphql\` is the deterministic SDL (shared across stacks); \`graphql_app.py\``,
+          `builds an \`ariadne\` schema over it and exposes a \`graphql_view\` (mounted in`,
+          `\`config/urls.py\`), and \`entities/<name>/graphql.py\` registers the per-entity`,
+          `resolvers over the SAME serializer + ORM the HTTP API uses. Apply migrations with`,
+          `\`python manage.py migrate\`, then \`python manage.py runserver\`.`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 /** Construct the Python (Django) backend plugin. */
 export function createDjangoPlugin(options: DjangoPluginOptions = {}): BackendPlugin {
   const templatesDir = options.templatesDir ?? DEFAULT_TEMPLATES_DIR;
@@ -351,6 +452,11 @@ export function createDjangoPlugin(options: DjangoPluginOptions = {}): BackendPl
       const projectType = model.getPhaseASettings().projectType;
       const workerKind: 'cron' | 'queue' | null =
         projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
+      // Day 36: CLI is a Django management command per entity (no root shell file —
+      // manage.py IS the entrypoint); GraphQL adds a /graphql view + schema.graphql +
+      // graphql_app.py (ariadne). A LITERAL BYPASS otherwise. Web scaffolding retained.
+      const endpointKind: 'cli' | 'graphql' | null =
+        projectType === 'CLI' ? 'cli' : projectType === 'GraphQL API' ? 'graphql' : null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
@@ -358,6 +464,11 @@ export function createDjangoPlugin(options: DjangoPluginOptions = {}): BackendPl
         if (workerKind) {
           if (relRaw === 'requirements.txt' && workerKind === 'queue') raw = addPikaRequire(raw);
           else if (relRaw === 'README.md') raw = addWorkerReadmeDj(raw, workerKind);
+        }
+        if (endpointKind) {
+          if (relRaw === 'requirements.txt' && endpointKind === 'graphql') raw = addAriadneRequire(raw);
+          else if (relRaw === 'config/urls.py' && endpointKind === 'graphql') raw = addGraphqlUrl(raw);
+          else if (relRaw === 'README.md') raw = addEndpointReadmeDj(raw, endpointKind);
         }
         const relOut = applyTokens(relRaw, tokens);
         const content = applyTokens(raw, tokens);
@@ -373,6 +484,16 @@ export function createDjangoPlugin(options: DjangoPluginOptions = {}): BackendPl
         files.push({ relPath: 'dispatcher.py', content: applyTokens(QUEUE_DISPATCHER_PY, tokens), ownership: 'thraksha' });
         files.push({ relPath: 'broker.py', content: applyTokens(QUEUE_BROKER_PY, tokens), ownership: 'thraksha' });
       }
+      // Day 36: GraphQL adds the schema (shared SDL) + the ariadne app + view (root).
+      // CLI adds nothing at the shell — the per-entity management commands are the CLI.
+      if (endpointKind === 'graphql') {
+        files.push({ relPath: 'graphql_app.py', content: applyTokens(GRAPHQL_APP_PY, tokens), ownership: 'thraksha' });
+        files.push({
+          relPath: 'schema.graphql',
+          content: buildCanonicalSdl(model.getEntities(), { multiUser: model.getPhaseASettings().multiUser === true, naming: model.getStyle().namingConvention }),
+          ownership: 'thraksha',
+        });
+      }
       return files;
     },
 
@@ -386,6 +507,10 @@ export function createDjangoPlugin(options: DjangoPluginOptions = {}): BackendPl
       // reusing the domain files byte-identically. A LITERAL BYPASS otherwise.
       if (context.projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
       if (context.projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
+      // Day 36: CLI adds a management command; GraphQL adds ariadne resolvers —
+      // both reuse the domain (models/serializers) byte-identically.
+      if (context.projectType === 'CLI') return generateCliEntityFiles(entity, ctx);
+      if (context.projectType === 'GraphQL API') return generateGraphqlEntityFiles(entity, ctx);
       return generateEntityFiles(entity, ctx);
     },
 

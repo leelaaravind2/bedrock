@@ -1071,6 +1071,310 @@ export function buildWorkerRegister(entities: Entity[], kind: 'cron' | 'queue'):
 }
 
 // ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2) — the same domain-reuse projection as
+// the workers: reuse the domain (<slug>.go/store/validate/service_base/service.go +
+// migration) BYTE-IDENTICALLY, and swap ONLY the HTTP layer (handler_base.go + the
+// dev routes.go) for:
+//   - CLI:     commands.go  — RunCommand: a CRUD command switch over the domain service.
+//   - GraphQL: graphql.go   — exported Graphql* funcs the root resolver delegates to
+//              (kept in the entity package so they can call the unexported toEntity).
+// Go is compiled, so the "table" is an explicit generated file (buildCommandRegister /
+// buildGraphqlResolver — the analog of register.go), and schema.graphql is the SHARED
+// core-built SDL (byte-identical across stacks).
+// ---------------------------------------------------------------------------
+
+/** The service call fragments for a worker/CLI/GraphQL system context (owner 0 when multi-user). */
+function svcCalls(ctx: EntityCodegenContext): {
+  list: string; get: (id: string) => string; create: (ent: string) => string;
+  update: (id: string, ent: string) => string; del: (id: string) => string; toEntity: string;
+} {
+  const mu = ctx.multiUser;
+  return {
+    list: mu ? 'List(0)' : 'List()',
+    get: (id) => (mu ? `Get(${id}, 0)` : `Get(${id})`),
+    create: (ent) => `Create(${ent})`,
+    update: (id, ent) => (mu ? `Update(${id}, 0, ${ent})` : `Update(${id}, ${ent})`),
+    del: (id) => (mu ? `Delete(${id}, 0)` : `Delete(${id})`),
+    toEntity: mu ? 'toEntity(0)' : 'toEntity()',
+  };
+}
+
+/** The CLI command slice for one entity (commands.go) — a CRUD switch over the domain service. */
+function buildCliCommands(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const c = svcCalls(ctx);
+  return [
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// CLI commands for ${name}: CRUD ops calling the SAME domain service the HTTP API`,
+    `// used (service.go). No HTTP route — the entrypoint dispatches "<entity> <op>".`,
+    `package ${slug}`,
+    ``,
+    `import (`,
+    `\t"database/sql"`,
+    `\t"encoding/json"`,
+    `\t"errors"`,
+    `\t"flag"`,
+    `\t"strconv"`,
+    `)`,
+    ``,
+    `// parseInput reads a --json '{...}' flag into a ${name}Input (deterministic, stdlib).`,
+    `func parseInput(args []string) (*${name}Input, error) {`,
+    `\tfs := flag.NewFlagSet("input", flag.ContinueOnError)`,
+    `\tbody := fs.String("json", "{}", "JSON body for the entity")`,
+    `\tif err := fs.Parse(args); err != nil {`,
+    `\t\treturn nil, err`,
+    `\t}`,
+    `\tvar in ${name}Input`,
+    `\tif err := json.Unmarshal([]byte(*body), &in); err != nil {`,
+    `\t\treturn nil, err`,
+    `\t}`,
+    `\treturn &in, nil`,
+    `}`,
+    ``,
+    `// RunCommand executes one CLI op for ${name} and returns a JSON-serialisable result.`,
+    `func RunCommand(db *sql.DB, op string, args []string) (interface{}, error) {`,
+    `\tsvc := New${name}Service(db)`,
+    `\tswitch op {`,
+    `\tcase "list":`,
+    `\t\treturn svc.${c.list}`,
+    `\tcase "get":`,
+    `\t\tif len(args) < 1 {`,
+    `\t\t\treturn nil, errors.New("id required")`,
+    `\t\t}`,
+    `\t\tid, err := strconv.ParseInt(args[0], 10, 64)`,
+    `\t\tif err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\treturn svc.${c.get('id')}`,
+    `\tcase "create":`,
+    `\t\tin, err := parseInput(args)`,
+    `\t\tif err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\tif err := in.Validate(); err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\treturn svc.${c.create('in.' + c.toEntity)}`,
+    `\tcase "update":`,
+    `\t\tif len(args) < 1 {`,
+    `\t\t\treturn nil, errors.New("id required")`,
+    `\t\t}`,
+    `\t\tid, err := strconv.ParseInt(args[0], 10, 64)`,
+    `\t\tif err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\tin, err := parseInput(args[1:])`,
+    `\t\tif err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\tif err := in.Validate(); err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\treturn svc.${c.update('id', 'in.' + c.toEntity)}`,
+    `\tcase "delete":`,
+    `\t\tif len(args) < 1 {`,
+    `\t\t\treturn nil, errors.New("id required")`,
+    `\t\t}`,
+    `\t\tid, err := strconv.ParseInt(args[0], 10, 64)`,
+    `\t\tif err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\tok, err := svc.${c.del('id')}`,
+    `\t\tif err != nil {`,
+    `\t\t\treturn nil, err`,
+    `\t\t}`,
+    `\t\treturn map[string]interface{}{"deleted": id, "ok": ok}, nil`,
+    `\tdefault:`,
+    `\t\treturn nil, errors.New("unknown op: " + op)`,
+    `\t}`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/** The GraphQL resolver funcs for one entity (graphql.go) — exported, delegated to by the root. */
+function buildGraphqlEntityResolvers(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const c = svcCalls(ctx);
+  return [
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// GraphQL resolver funcs for ${name}: exported so the root resolver (internal/graphql)`,
+    `// can delegate here, reusing the SAME domain service (service.go) + Input validation.`,
+    `// Kept in the entity package so they can call the unexported toEntity mapper.`,
+    `package ${slug}`,
+    ``,
+    `import (`,
+    `\t"database/sql"`,
+    `\t"strconv"`,
+    `)`,
+    ``,
+    `// GraphqlList resolves the ${slug}s query.`,
+    `func GraphqlList(db *sql.DB) ([]*${name}, error) {`,
+    `\treturn New${name}Service(db).${c.list}`,
+    `}`,
+    ``,
+    `// GraphqlGet resolves the ${slug}(id) query.`,
+    `func GraphqlGet(db *sql.DB, idStr string) (*${name}, error) {`,
+    `\tid, err := strconv.ParseInt(idStr, 10, 64)`,
+    `\tif err != nil {`,
+    `\t\treturn nil, err`,
+    `\t}`,
+    `\treturn New${name}Service(db).${c.get('id')}`,
+    `}`,
+    ``,
+    `// GraphqlCreate resolves the create${name} mutation.`,
+    `func GraphqlCreate(db *sql.DB, in *${name}Input) (*${name}, error) {`,
+    `\tif err := in.Validate(); err != nil {`,
+    `\t\treturn nil, err`,
+    `\t}`,
+    `\treturn New${name}Service(db).${c.create('in.' + c.toEntity)}`,
+    `}`,
+    ``,
+    `// GraphqlUpdate resolves the update${name} mutation.`,
+    `func GraphqlUpdate(db *sql.DB, idStr string, in *${name}Input) (*${name}, error) {`,
+    `\tid, err := strconv.ParseInt(idStr, 10, 64)`,
+    `\tif err != nil {`,
+    `\t\treturn nil, err`,
+    `\t}`,
+    `\tif err := in.Validate(); err != nil {`,
+    `\t\treturn nil, err`,
+    `\t}`,
+    `\treturn New${name}Service(db).${c.update('id', 'in.' + c.toEntity)}`,
+    `}`,
+    ``,
+    `// GraphqlDelete resolves the delete${name} mutation.`,
+    `func GraphqlDelete(db *sql.DB, idStr string) (bool, error) {`,
+    `\tid, err := strconv.ParseInt(idStr, 10, 64)`,
+    `\tif err != nil {`,
+    `\t\treturn false, err`,
+    `\t}`,
+    `\treturn New${name}Service(db).${c.del('id')}`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/** Domain files shared by CLI/GraphQL (byte-identical to the api-only twin). */
+function goDomainEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  const slug = entitySlug(entity);
+  const dir = `internal/entities/${slug}`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+  return [
+    { relPath: `${dir}/${slug}.go`, content: buildModel(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/store.go`, content: buildStore(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/validate.go`, content: buildValidate(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/service_base.go`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `migrations/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/service.go`, content: buildServiceDev(entity), ownership: 'developer' },
+  ];
+}
+
+/** CLI entity file set (Day 36): domain (byte-identical) + commands.go. */
+export function generateCliEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  return [
+    ...goDomainEntityFiles(entity, ctx),
+    { relPath: `internal/entities/${slug}/commands.go`, content: buildCliCommands(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+/** GraphQL entity file set (Day 36): domain (byte-identical) + graphql.go (exported resolver funcs). */
+export function generateGraphqlEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  return [
+    ...goDomainEntityFiles(entity, ctx),
+    { relPath: `internal/entities/${slug}/graphql.go`, content: buildGraphqlEntityResolvers(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+/** The shell command table (internal/commands/register.go) — dispatch "<entity> <op>". */
+export function buildCommandRegister(entities: Entity[]): string {
+  const sorted = [...entities].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const slugs = sorted.map((e) => e.name.toLowerCase());
+  const imports = slugs.map((s) => `\t"app/internal/entities/${s}"`);
+  const cases = slugs.flatMap((s) => [`\tcase "${s}":`, `\t\treturn ${s}.RunCommand(db, op, args)`]);
+  return [
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// The command table: dispatches "<entity> <op> [args]" to the entity's RunCommand.`,
+    `package commands`,
+    ``,
+    `import (`,
+    `\t"database/sql"`,
+    `\t"errors"`,
+    ...(imports.length > 0 ? [``, ...imports] : []),
+    `)`,
+    ``,
+    `// Run dispatches a CLI command to the right entity.`,
+    `func Run(db *sql.DB, entity, op string, args []string) (interface{}, error) {`,
+    `\tswitch entity {`,
+    ...(cases.length > 0 ? cases : []),
+    `\tdefault:`,
+    `\t\treturn nil, errors.New("unknown entity: " + entity)`,
+    `\t}`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/** The shell root GraphQL resolver (internal/graphql/resolver.go) — delegates to entity Graphql* funcs. */
+export function buildGraphqlResolver(entities: Entity[]): string {
+  const sorted = [...entities].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const imports = sorted.map((e) => `\t"app/internal/entities/${e.name.toLowerCase()}"`);
+  const methods = sorted.flatMap((e) => {
+    const slug = e.name.toLowerCase();
+    const N = e.name;
+    return [
+      ``,
+      `func (r *Resolver) ${N}s(ctx context.Context) ([]*${slug}.${N}, error) {`,
+      `\treturn ${slug}.GraphqlList(r.DB)`,
+      `}`,
+      ``,
+      `func (r *Resolver) ${N}(ctx context.Context, args struct{ ID string }) (*${slug}.${N}, error) {`,
+      `\treturn ${slug}.GraphqlGet(r.DB, args.ID)`,
+      `}`,
+      ``,
+      `func (r *Resolver) Create${N}(ctx context.Context, args struct{ Input ${slug}.${N}Input }) (*${slug}.${N}, error) {`,
+      `\treturn ${slug}.GraphqlCreate(r.DB, &args.Input)`,
+      `}`,
+      ``,
+      `func (r *Resolver) Update${N}(ctx context.Context, args struct {`,
+      `\tID    string`,
+      `\tInput ${slug}.${N}Input`,
+      `}) (*${slug}.${N}, error) {`,
+      `\treturn ${slug}.GraphqlUpdate(r.DB, args.ID, &args.Input)`,
+      `}`,
+      ``,
+      `func (r *Resolver) Delete${N}(ctx context.Context, args struct{ ID string }) (bool, error) {`,
+      `\treturn ${slug}.GraphqlDelete(r.DB, args.ID)`,
+      `}`,
+    ];
+  });
+  return [
+    `// THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    `// The root GraphQL resolver: delegates each Query/Mutation field to the entity`,
+    `// package's exported Graphql* funcs. With graphql.UseFieldResolvers(), the domain`,
+    `// entity structs' exported fields map directly to GraphQL fields.`,
+    `package graphql`,
+    ``,
+    `import (`,
+    `\t"context"`,
+    `\t"database/sql"`,
+    ...(imports.length > 0 ? [``, ...imports] : []),
+    `)`,
+    ``,
+    `// Resolver is the root resolver, holding the DB handle.`,
+    `type Resolver struct{ DB *sql.DB }`,
+    ...methods,
+    ``,
+  ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Public API.
 // ---------------------------------------------------------------------------
 

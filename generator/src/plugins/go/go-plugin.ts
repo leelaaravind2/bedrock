@@ -23,11 +23,16 @@ import { postgresProvider } from '../database/postgres.js';
 import {
   generateEntityFiles,
   generateWorkerEntityFiles,
+  generateCliEntityFiles,
+  generateGraphqlEntityFiles,
   buildEntityRegister,
   buildWorkerRegister,
+  buildCommandRegister,
+  buildGraphqlResolver,
   describeEntityDefaults as describeGoEntityDefaults,
   type EntityCodegenContext,
 } from './entity-codegen.js';
+import { buildCanonicalSdl } from '../../core/graphql-sdl.js';
 
 // This file compiles to dist/plugins/go/go-plugin.js; its templates live at
 // generator/plugins/go/templates (three levels up from dist/), so every caller
@@ -299,6 +304,154 @@ function addWorkerReadmeGo(raw: string, kind: 'cron' | 'queue'): string {
   return raw.trimEnd() + '\n' + lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2). Both swap the HTTP entrypoint
+// (main.go + internal/entities/register.go) for a CLI (stdlib flag/os.Args — NO
+// dep) or a GraphQL server (graph-gophers/graphql-go — a GATED go.mod dep) over the
+// SHARED deterministic schema.graphql. A LITERAL BYPASS otherwise. Generation-only.
+// ---------------------------------------------------------------------------
+
+/** CLI entrypoint (main.go): parse "<entity> <op> [--json '{...}']", dispatch, run-to-exit (stdlib). */
+const CLI_MAIN_GO = [
+  `// __PROJECT_NAME__ — Go CLI. Parse "go run . <entity> <op> [id] [--json '{...}']",`,
+  `// dispatch, print the JSON result, and exit. Stdlib flag/os.Args — NO dependency.`,
+  `package main`,
+  ``,
+  `import (`,
+  `\t"encoding/json"`,
+  `\t"fmt"`,
+  `\t"log"`,
+  `\t"os"`,
+  ``,
+  `\t"app/internal/commands"`,
+  `\t"app/internal/config"`,
+  `\t"app/internal/db"`,
+  `\t"app/internal/migrate"`,
+  `\t"app/internal/seed"`,
+  `)`,
+  ``,
+  `func main() {`,
+  `\tif len(os.Args) < 3 {`,
+  `\t\tfmt.Fprintln(os.Stderr, "usage: <entity> <list|get|create|update|delete> [id] [--json '{...}']")`,
+  `\t\tos.Exit(2)`,
+  `\t}`,
+  `\tentity, op := os.Args[1], os.Args[2]`,
+  `\trest := os.Args[3:]`,
+  ``,
+  `\tcfg := config.Load()`,
+  `\tdatabase, err := db.Open(cfg)`,
+  `\tif err != nil {`,
+  `\t\tlog.Fatalf("database: %v", err)`,
+  `\t}`,
+  `\tdefer database.Close()`,
+  `\tif err := migrate.Run(database); err != nil {`,
+  `\t\tlog.Fatalf("migrate: %v", err)`,
+  `\t}`,
+  `\tif err := seed.Run(database); err != nil {`,
+  `\t\tlog.Fatalf("seed: %v", err)`,
+  `\t}`,
+  ``,
+  `\tresult, err := commands.Run(database, entity, op, rest)`,
+  `\tif err != nil {`,
+  `\t\tlog.Fatalf("error: %v", err)`,
+  `\t}`,
+  `\tout, _ := json.MarshalIndent(result, "", "  ")`,
+  `\tfmt.Println(string(out))`,
+  `}`,
+  ``,
+].join('\n');
+
+/** GraphQL entrypoint (main.go): ONE /graphql endpoint over the shared SDL (graph-gophers). */
+const GRAPHQL_MAIN_GO = [
+  `// __PROJECT_NAME__ — Go GraphQL API. ONE /graphql endpoint over the deterministic`,
+  `// SDL (schema.graphql) using graph-gophers/graphql-go. Reuses the domain layer;`,
+  `// there are NO REST route/controller files.`,
+  `package main`,
+  ``,
+  `import (`,
+  `\t"log"`,
+  `\t"net/http"`,
+  `\t"os"`,
+  ``,
+  `\tgraphql "github.com/graph-gophers/graphql-go"`,
+  `\t"github.com/graph-gophers/graphql-go/relay"`,
+  ``,
+  `\t"app/internal/config"`,
+  `\t"app/internal/db"`,
+  `\tappgraphql "app/internal/graphql"`,
+  `\t"app/internal/migrate"`,
+  `\t"app/internal/seed"`,
+  `)`,
+  ``,
+  `func main() {`,
+  `\tcfg := config.Load()`,
+  `\tdatabase, err := db.Open(cfg)`,
+  `\tif err != nil {`,
+  `\t\tlog.Fatalf("database: %v", err)`,
+  `\t}`,
+  `\tdefer database.Close()`,
+  `\tif err := migrate.Run(database); err != nil {`,
+  `\t\tlog.Fatalf("migrate: %v", err)`,
+  `\t}`,
+  `\tif err := seed.Run(database); err != nil {`,
+  `\t\tlog.Fatalf("seed: %v", err)`,
+  `\t}`,
+  ``,
+  `\tsdl, err := os.ReadFile("schema.graphql")`,
+  `\tif err != nil {`,
+  `\t\tlog.Fatalf("schema: %v", err)`,
+  `\t}`,
+  `\t// UseFieldResolvers maps the domain entity structs' exported fields to GraphQL fields.`,
+  `\tschema := graphql.MustParseSchema(string(sdl), &appgraphql.Resolver{DB: database}, graphql.UseFieldResolvers())`,
+  ``,
+  `\thttp.Handle("/graphql", &relay.Handler{Schema: schema})`,
+  `\tlog.Println("__PROJECT_NAME__ GraphQL API listening on :8080 (POST /graphql)")`,
+  `\tif err := http.ListenAndServe(":8080", nil); err != nil {`,
+  `\t\tlog.Fatal(err)`,
+  `\t}`,
+  `}`,
+  ``,
+].join('\n');
+
+/** Add the graph-gophers/graphql-go runtime to go.mod (GraphQL) — a gated GENERATED-PROJECT dep. */
+function addGraphqlRequire(raw: string): string {
+  return raw.replace(
+    `\tgolang.org/x/crypto v0.31.0`,
+    `\tgithub.com/graph-gophers/graphql-go v1.5.0\n\tgolang.org/x/crypto v0.31.0`,
+  );
+}
+
+/** Append a truthful CLI/GraphQL section to the Go README. */
+function addEndpointReadmeGo(raw: string, kind: 'cli' | 'graphql'): string {
+  const lines =
+    kind === 'cli'
+      ? [
+          ``,
+          `## CLI (project type: CLI)`,
+          ``,
+          `This is a **command-line tool**, not an HTTP server: \`main.go\` parses`,
+          `\`go run . <entity> <op> [id] [--json '{...}']\` (stdlib \`flag\`/\`os.Args\` — **no`,
+          `dependency**), runs migrations + seed, dispatches via \`internal/commands/register.go\``,
+          `to the entity's \`RunCommand\` (\`internal/entities/<name>/commands.go\`), prints the`,
+          `JSON result, and exits. Commands reuse the SAME domain services the REST API would.`,
+          ``,
+        ]
+      : [
+          ``,
+          `## GraphQL API (project type: GraphQL API)`,
+          ``,
+          `This exposes **one GraphQL endpoint**, \`POST /graphql\`, instead of the REST routes.`,
+          `\`schema.graphql\` is the deterministic SDL (shared across stacks); \`main.go\` serves it`,
+          `via \`graph-gophers/graphql-go\` with \`UseFieldResolvers()\`, and`,
+          `\`internal/graphql/resolver.go\` delegates each field to the entity package's exported`,
+          `\`Graphql*\` funcs (\`internal/entities/<name>/graphql.go\`), reusing the SAME domain`,
+          `services the REST API would. Note: custom scalars (\`DateTime\`, \`Decimal\`) may need a`,
+          `scalar type wired to your runtime.`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 export interface GoPluginOptions {
   /** Override the bundled templates directory (tests only). */
   templatesDir?: string;
@@ -324,15 +477,24 @@ export function createGoPlugin(options: GoPluginOptions = {}): BackendPlugin {
       const projectType = model.getPhaseASettings().projectType;
       const workerKind: 'cron' | 'queue' | null =
         projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
+      // Day 36: CLI + GraphQL are also entrypoint/route-table projections that swap
+      // main.go + register.go. A LITERAL BYPASS otherwise.
+      const endpointKind: 'cli' | 'graphql' | null =
+        projectType === 'CLI' ? 'cli' : projectType === 'GraphQL API' ? 'graphql' : null;
+      const swapsEntrypoint = workerKind !== null || endpointKind !== null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
-        // Worker types replace main.go (the HTTP entrypoint) with a worker main.go.
-        if (workerKind && relRaw === 'main.go') continue;
+        // Worker/CLI/GraphQL types replace main.go (the HTTP entrypoint).
+        if (swapsEntrypoint && relRaw === 'main.go') continue;
         let raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
         if (workerKind) {
           if (relRaw === 'go.mod' && workerKind === 'queue') raw = addAmqpRequire(raw);
           else if (relRaw === 'README.md') raw = addWorkerReadmeGo(raw, workerKind);
+        }
+        if (endpointKind) {
+          if (relRaw === 'go.mod' && endpointKind === 'graphql') raw = addGraphqlRequire(raw);
+          else if (relRaw === 'README.md') raw = addEndpointReadmeGo(raw, endpointKind);
         }
         const relOut = applyTokens(relRaw, tokens);
         const content = applyTokens(raw, tokens);
@@ -346,6 +508,24 @@ export function createGoPlugin(options: GoPluginOptions = {}): BackendPlugin {
         if (workerKind === 'queue') {
           files.push({ relPath: 'internal/worker/broker.go', content: applyTokens(QUEUE_BROKER_GO, tokens), ownership: 'thraksha' });
         }
+        return files;
+      }
+      if (endpointKind === 'cli') {
+        // CLI entrypoint (main.go) + the command table (internal/commands/register.go).
+        files.push({ relPath: 'main.go', content: applyTokens(CLI_MAIN_GO, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'internal/commands/register.go', content: buildCommandRegister(model.getEntities()), ownership: 'thraksha' });
+        return files;
+      }
+      if (endpointKind === 'graphql') {
+        // GraphQL entrypoint (main.go) + the root resolver (internal/graphql/resolver.go)
+        // + the SHARED deterministic SDL (schema.graphql).
+        files.push({ relPath: 'main.go', content: applyTokens(GRAPHQL_MAIN_GO, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'internal/graphql/resolver.go', content: buildGraphqlResolver(model.getEntities()), ownership: 'thraksha' });
+        files.push({
+          relPath: 'schema.graphql',
+          content: buildCanonicalSdl(model.getEntities(), { multiUser: model.getPhaseASettings().multiUser === true, naming: model.getStyle().namingConvention }),
+          ownership: 'thraksha',
+        });
         return files;
       }
       // Go is compiled: entity route wiring must be an explicit, generated file
@@ -370,6 +550,10 @@ export function createGoPlugin(options: GoPluginOptions = {}): BackendPlugin {
       // reusing the domain files byte-identically. A LITERAL BYPASS otherwise.
       if (context.projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
       if (context.projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
+      // Day 36: CLI + GraphQL swap the entity HTTP handler layer for a command /
+      // resolver slice, reusing the domain files byte-identically.
+      if (context.projectType === 'CLI') return generateCliEntityFiles(entity, ctx);
+      if (context.projectType === 'GraphQL API') return generateGraphqlEntityFiles(entity, ctx);
       return generateEntityFiles(entity, ctx);
     },
 

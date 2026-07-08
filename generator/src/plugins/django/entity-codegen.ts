@@ -643,6 +643,174 @@ export function generateWorkerEntityFiles(
   ];
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2) — reuse the domain BYTE-IDENTICALLY and
+// swap the HTTP view layer (views_base.py + the dev views.py/urls.py) for:
+//   - CLI:     a Django MANAGEMENT COMMAND (`python manage.py <entity> <op>`) — the
+//              idiomatic Django CLI; no dep. Adds management/commands/<slug>.py.
+//   - GraphQL: graphql.py — register(query, mutation): ariadne resolvers over the
+//              serializer + ORM. The shell adds a /graphql view + schema.graphql.
+// ---------------------------------------------------------------------------
+
+/** GraphQL query/mutation field names for an entity — MUST match core/graphql-sdl.ts. */
+function graphqlNames(entity: Entity): { single: string; plural: string } {
+  const single = entity.name.charAt(0).toLowerCase() + entity.name.slice(1);
+  return { single, plural: `${single}s` };
+}
+
+/** The CLI management command for one entity (management/commands/<slug>.py). */
+function buildCliCommand(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const ownerImport = ctx.multiUser ? [`from django.contrib.auth import get_user_model`] : [];
+  const createSave = ctx.multiUser
+    ? [
+        `            owner = get_user_model().objects.order_by("id").first()`,
+        `            serializer.save(owner=owner)`,
+      ]
+    : [`            serializer.save()`];
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `Management command for ${name}: \`python manage.py ${slug} <op>\` — CRUD over the`,
+    `SAME serializer + ORM model the HTTP API uses. No HTTP route.`,
+    `"""`,
+    `import json`,
+    ``,
+    `from django.core.management.base import BaseCommand`,
+    ...ownerImport,
+    ``,
+    `from entities.${slug}.models import ${name}`,
+    `from entities.${slug}.serializers import ${name}Serializer`,
+    ``,
+    ``,
+    `class Command(BaseCommand):`,
+    `    help = "CRUD operations for ${name} (list/get/create/update/delete)."`,
+    ``,
+    `    def add_arguments(self, parser):`,
+    `        parser.add_argument("op", choices=["list", "get", "create", "update", "delete"])`,
+    `        parser.add_argument("--id", type=int, default=None)`,
+    `        parser.add_argument("--json", dest="body", default="{}")`,
+    ``,
+    `    def handle(self, *args, **opts):`,
+    `        op = opts["op"]`,
+    `        if op == "list":`,
+    `            result = ${name}Serializer(${name}.objects.all().order_by("id"), many=True).data`,
+    `        elif op == "get":`,
+    `            result = ${name}Serializer(${name}.objects.get(pk=opts["id"])).data`,
+    `        elif op == "create":`,
+    `            serializer = ${name}Serializer(data=json.loads(opts["body"]))`,
+    `            serializer.is_valid(raise_exception=True)`,
+    ...createSave,
+    `            result = serializer.data`,
+    `        elif op == "update":`,
+    `            obj = ${name}.objects.get(pk=opts["id"])`,
+    `            serializer = ${name}Serializer(obj, data=json.loads(opts["body"]), partial=True)`,
+    `            serializer.is_valid(raise_exception=True)`,
+    `            serializer.save()`,
+    `            result = serializer.data`,
+    `        else:  # delete`,
+    `            ${name}.objects.filter(pk=opts["id"]).delete()`,
+    `            result = {"deleted": opts["id"]}`,
+    `        self.stdout.write(json.dumps(result, indent=2, default=str))`,
+    ``,
+  ].join('\n');
+}
+
+/** The GraphQL resolver slice for one entity (graphql.py) — ariadne resolvers over the serializer/ORM. */
+function buildGraphqlEntityResolvers(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const { single, plural } = graphqlNames(entity);
+  const ownerImport = ctx.multiUser ? [`from django.contrib.auth import get_user_model`, ``] : [];
+  const createSave = ctx.multiUser
+    ? [
+        `        owner = get_user_model().objects.order_by("id").first()`,
+        `        serializer.save(owner=owner)`,
+      ]
+    : [`        serializer.save()`];
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `GraphQL resolvers for ${name}: query/mutation resolvers over the SAME serializer +`,
+    `ORM model the HTTP API uses (serializers.py / models.py). No HTTP route — the shell`,
+    `(graphql_app.py) registers them on the shared ariadne Query/Mutation types.`,
+    `"""`,
+    ...ownerImport,
+    `from .models import ${name}`,
+    `from .serializers import ${name}Serializer`,
+    ``,
+    ``,
+    `def register(query, mutation):`,
+    `    @query.field("${plural}")`,
+    `    def _list(*_):`,
+    `        return ${name}Serializer(${name}.objects.all().order_by("id"), many=True).data`,
+    ``,
+    `    @query.field("${single}")`,
+    `    def _get(_obj, _info, id):`,
+    `        obj = ${name}.objects.filter(pk=int(id)).first()`,
+    `        return ${name}Serializer(obj).data if obj else None`,
+    ``,
+    `    @mutation.field("create${name}")`,
+    `    def _create(_obj, _info, input):`,
+    `        serializer = ${name}Serializer(data=input)`,
+    `        serializer.is_valid(raise_exception=True)`,
+    ...createSave,
+    `        return serializer.data`,
+    ``,
+    `    @mutation.field("update${name}")`,
+    `    def _update(_obj, _info, id, input):`,
+    `        obj = ${name}.objects.get(pk=int(id))`,
+    `        serializer = ${name}Serializer(obj, data=input, partial=True)`,
+    `        serializer.is_valid(raise_exception=True)`,
+    `        serializer.save()`,
+    `        return serializer.data`,
+    ``,
+    `    @mutation.field("delete${name}")`,
+    `    def _delete(_obj, _info, id):`,
+    `        ${name}.objects.filter(pk=int(id)).delete()`,
+    `        return True`,
+    ``,
+  ].join('\n');
+}
+
+/** Domain files shared by CLI/GraphQL (byte-identical to the api-only twin). */
+function djDomainEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  const slug = entitySlug(entity);
+  const dir = `entities/${slug}`;
+  return [
+    { relPath: `${dir}/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/apps.py`, content: buildApps(entity), ownership: 'thraksha' },
+    { relPath: `${dir}/models.py`, content: buildModels(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/serializers.py`, content: buildSerializer(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/migrations/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/migrations/0001_initial.py`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+/** CLI entity file set (Day 36): domain (byte-identical) + a management command. */
+export function generateCliEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  const dir = `entities/${slug}`;
+  return [
+    ...djDomainEntityFiles(entity, ctx),
+    // The Django management-command idiom: `python manage.py <slug> <op>`.
+    { relPath: `${dir}/management/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/management/commands/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/management/commands/${slug}.py`, content: buildCliCommand(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+/** GraphQL entity file set (Day 36): domain (byte-identical) + graphql.py. */
+export function generateGraphqlEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  return [
+    ...djDomainEntityFiles(entity, ctx),
+    { relPath: `entities/${slug}/graphql.py`, content: buildGraphqlEntityResolvers(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
 /**
  * Human-readable lines describing the effective field rules and which were
  * filled in by platform defaults (ADR-004 — shown, never silent).

@@ -26,9 +26,12 @@ import { postgresProvider } from '../database/postgres.js';
 import {
   generateEntityFiles,
   generateWorkerEntityFiles,
+  generateCliEntityFiles,
+  generateGraphqlEntityFiles,
   describeEntityDefaults as describeSpringEntityDefaults,
   type EntityCodegenContext,
 } from './entity-codegen.js';
+import { buildCanonicalSdl } from '../../core/graphql-sdl.js';
 
 // The Spring plugin owns its own template shell and resolves it relative to its
 // compiled location, so EVERY caller (the CLI and the UI server) gets the same
@@ -251,6 +254,133 @@ function addStaticSiteReadme(raw: string): string {
   ].join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2). CLI = a CommandLineRunner + an
+// EntityCommand interface (per-entity @Component commands) — no dep. GraphQL =
+// spring-boot-starter-graphql (a GATED pom dep) over the SHARED schema.graphqls
+// (backend/src/main/resources/graphql) + per-entity @Controller resolvers. Both are
+// frontendless (isFrontendless true → the frontend is subtracted like api-only).
+// A LITERAL BYPASS otherwise. Generation-only (no JDK here).
+// ---------------------------------------------------------------------------
+
+/** The EntityCommand interface (com.<slug>.cli.EntityCommand) — one entity's CLI surface. */
+const CLI_ENTITY_COMMAND_JAVA = [
+  `package __PACKAGE__.cli;`,
+  ``,
+  `import java.util.Map;`,
+  ``,
+  `/**`,
+  ` * THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+  ` *`,
+  ` * One entity's CLI command surface, implemented per entity (<Name>Command) and`,
+  ` * dispatched by CliRunner. Reuses the domain repository + Dto (no HTTP).`,
+  ` */`,
+  `public interface EntityCommand {`,
+  `    String name();`,
+  ``,
+  `    Object run(String op, Map<String, String> args) throws Exception;`,
+  `}`,
+  ``,
+].join('\n');
+
+/** The CLI entrypoint (com.<slug>.cli.CliRunner) — a CommandLineRunner dispatching to EntityCommands. */
+const CLI_RUNNER_JAVA = [
+  `package __PACKAGE__.cli;`,
+  ``,
+  `import java.util.HashMap;`,
+  `import java.util.List;`,
+  `import java.util.Map;`,
+  `import com.fasterxml.jackson.databind.ObjectMapper;`,
+  `import org.springframework.boot.CommandLineRunner;`,
+  `import org.springframework.stereotype.Component;`,
+  ``,
+  `/**`,
+  ` * THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+  ` *`,
+  ` * The CLI entrypoint: dispatch "<entity> <op> [--id N] [--json '{...}']" to the`,
+  ` * matching EntityCommand (all @Component EntityCommands are injected), print the`,
+  ` * JSON result, and exit. Run with: mvn spring-boot:run -Dspring-boot.run.arguments="ticket list".`,
+  ` * (For a pure CLI, set spring.main.web-application-type=none.)`,
+  ` */`,
+  `@Component`,
+  `public class CliRunner implements CommandLineRunner {`,
+  ``,
+  `    private final Map<String, EntityCommand> commands = new HashMap<>();`,
+  `    private final ObjectMapper mapper = new ObjectMapper();`,
+  ``,
+  `    public CliRunner(List<EntityCommand> beans) {`,
+  `        for (EntityCommand c : beans) {`,
+  `            commands.put(c.name(), c);`,
+  `        }`,
+  `    }`,
+  ``,
+  `    @Override`,
+  `    public void run(String... argv) throws Exception {`,
+  `        if (argv.length < 2) {`,
+  `            System.err.println("usage: <entity> <op> [--id N] [--json '{...}']");`,
+  `            return;`,
+  `        }`,
+  `        String entity = argv[0];`,
+  `        String op = argv[1];`,
+  `        Map<String, String> args = new HashMap<>();`,
+  `        for (int i = 2; i < argv.length - 1; i++) {`,
+  `            if (argv[i].startsWith("--")) {`,
+  `                args.put(argv[i].substring(2), argv[i + 1]);`,
+  `                i++;`,
+  `            }`,
+  `        }`,
+  `        EntityCommand cmd = commands.get(entity);`,
+  `        if (cmd == null) {`,
+  `            System.err.println("unknown entity: " + entity);`,
+  `            return;`,
+  `        }`,
+  `        Object result = cmd.run(op, args);`,
+  `        System.out.println(mapper.writerWithDefaultPrettyPrinter().writeValueAsString(result));`,
+  `    }`,
+  `}`,
+  ``,
+].join('\n');
+
+/** Add spring-boot-starter-graphql to pom.xml (GraphQL) — a gated GENERATED-PROJECT dep. */
+function addGraphqlStarter(raw: string): string {
+  return raw.replace(
+    `        <dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-actuator</artifactId>\n        </dependency>`,
+    `        <dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-actuator</artifactId>\n        </dependency>\n        <dependency>\n            <groupId>org.springframework.boot</groupId>\n            <artifactId>spring-boot-starter-graphql</artifactId>\n        </dependency>`,
+  );
+}
+
+/** Append a truthful CLI/GraphQL section to the Spring README. */
+function addEndpointReadmeSpring(raw: string, kind: 'cli' | 'graphql'): string {
+  const lines =
+    kind === 'cli'
+      ? [
+          ``,
+          `## CLI (project type: CLI)`,
+          ``,
+          `This backend is a **command-line tool**: \`CliRunner\` (a \`CommandLineRunner\`) dispatches`,
+          `\`<entity> <op> [--id N] [--json '{...}']\` to the matching \`<Name>Command\` \`@Component\`,`,
+          `which runs CRUD over the SAME \`<Name>Repository\` + \`<Name>Dto\` the HTTP API's service`,
+          `uses — **no CLI dependency** (Jackson is already on the classpath). Run e.g.`,
+          `\`mvn spring-boot:run -Dspring-boot.run.arguments="ticket list"\`. For a pure CLI, set`,
+          `\`spring.main.web-application-type=none\`. No REST controllers are generated.`,
+          ``,
+        ]
+      : [
+          ``,
+          `## GraphQL API (project type: GraphQL API)`,
+          ``,
+          `This backend exposes **GraphQL** (one endpoint) instead of REST: it adds`,
+          `\`spring-boot-starter-graphql\`, ships the deterministic SDL at`,
+          `\`backend/src/main/resources/graphql/schema.graphqls\` (shared across stacks), and each`,
+          `entity ships a \`<Name>GraphqlController\` \`@Controller\` whose \`@QueryMapping\` /`,
+          `\`@MutationMapping\` methods run over the SAME \`<Name>Repository\` + \`<Name>Dto\` the HTTP`,
+          `API's service uses. No REST controllers are generated. (Custom scalars \`DateTime\` /`,
+          `\`Decimal\` may need a runtime registration.)`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 export interface SpringPluginOptions {
   /**
    * Absolute path to this plugin's template shell directory. Optional — when
@@ -291,6 +421,11 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
       // is false) + an ADDITIVE static-output build stage. It swaps nothing; it adds a
       // static-build script + a README note. A LITERAL BYPASS otherwise.
       const staticSite = projectType === 'Static Site + API';
+      // Day 36: CLI (a CommandLineRunner + EntityCommands) / GraphQL (spring-graphql +
+      // the shared SDL). Both frontendless (apiOnly true → frontend subtracted). A
+      // LITERAL BYPASS otherwise. The entity controller layer is swapped in generateEntity.
+      const endpointKind: 'cli' | 'graphql' | null =
+        projectType === 'CLI' ? 'cli' : projectType === 'GraphQL API' ? 'graphql' : null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
@@ -304,6 +439,10 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
           else if (relRaw === 'README.md') raw = addWorkerReadmeSpring(raw, workerKind);
         }
         if (staticSite && relRaw === 'README.md') raw = addStaticSiteReadme(raw);
+        if (endpointKind) {
+          if (endpointKind === 'graphql' && relRaw === 'backend/pom.xml') raw = addGraphqlStarter(raw);
+          else if (relRaw === 'README.md') raw = addEndpointReadmeSpring(raw, endpointKind);
+        }
         const relOut = applyTokens(relRaw, tokens);
         const content = applyTokens(raw, tokens);
         files.push({ relPath: relOut, content, ownership: 'thraksha' });
@@ -313,6 +452,19 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
         // renders the React frontend to static assets (frontend/dist) any static host
         // can serve, alongside the Spring API. Frontend + API are both retained.
         files.push({ relPath: 'static-build.sh', content: applyTokens(STATIC_BUILD_SH, tokens), ownership: 'thraksha' });
+      }
+      if (endpointKind === 'cli') {
+        // The CLI entrypoint (CommandLineRunner) + the EntityCommand interface the
+        // per-entity commands implement (component-scanned).
+        files.push({ relPath: `backend/src/main/java/${tokens.__PACKAGE_PATH__}/cli/EntityCommand.java`, content: applyTokens(CLI_ENTITY_COMMAND_JAVA, tokens), ownership: 'thraksha' });
+        files.push({ relPath: `backend/src/main/java/${tokens.__PACKAGE_PATH__}/cli/CliRunner.java`, content: applyTokens(CLI_RUNNER_JAVA, tokens), ownership: 'thraksha' });
+      } else if (endpointKind === 'graphql') {
+        // The SHARED deterministic SDL, at Spring's schema location (resources/graphql).
+        files.push({
+          relPath: 'backend/src/main/resources/graphql/schema.graphqls',
+          content: buildCanonicalSdl(model.getEntities(), { multiUser: model.getPhaseASettings().multiUser === true, naming: model.getStyle().namingConvention }),
+          ownership: 'thraksha',
+        });
       }
       return files;
     },
@@ -332,6 +484,10 @@ export function createSpringPlugin(options: SpringPluginOptions = {}): BackendPl
       // / @RabbitListener, reusing the domain files byte-identically. Bypass otherwise.
       if (context.projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
       if (context.projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
+      // Day 36: CLI adds a per-entity command; GraphQL a per-entity @Controller —
+      // both reuse the domain (Base/Repository/Dto/ServiceBase) byte-identically.
+      if (context.projectType === 'CLI') return generateCliEntityFiles(entity, ctx);
+      if (context.projectType === 'GraphQL API') return generateGraphqlEntityFiles(entity, ctx);
       return generateEntityFiles(entity, ctx);
     },
 

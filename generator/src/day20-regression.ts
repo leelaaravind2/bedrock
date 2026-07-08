@@ -1165,6 +1165,48 @@ async function main(): Promise<void> {
     record(cliFrontendless && gqlFrontendless && staticKeepsFrontend, 'frontend-constraint refinement: CLI/GraphQL → frontend None; Static Site + API → frontend React (kept)');
   }
 
+  // ── PART 1r (pass 2) — CLI + GraphQL for the other 4 stacks (Go/FastAPI/Django/Spring) ──
+  // Generation-only (no toolchain to boot/compile here) — determinism proven via the
+  // twice-identical baselines + the domain-reuse diff + the SHARED-SDL identity (the SDL is
+  // byte-identical across all 5 stacks, from the one core builder). Runtime reasoned from Express.
+  process.stdout.write('\n=== PART 1r (pass 2): CLI + GraphQL — Go/FastAPI/Django/Spring (Eco-Day 36 — generation-only) ===\n');
+  {
+    // The per-stack HTTP route/controller marker removed, and the SDL path, per stack.
+    const STACKS: Record<string, { cli: string; graphql: string; http: RegExp; sdlPath: string; rewritten: RegExp }> = {
+      Go: { cli: 'a669810613246f9cbdd89e447cf548221b29c9fd8f3f636a6ee7fadf0a340eb9', graphql: 'a6e71d7388435dd775d1c675c0ac774133c66178a35e3303d611385b70b99c75', http: /handler_base\.go$/, sdlPath: 'schema.graphql', rewritten: /GENERATION-MANIFEST|README|go\.mod|(^|\/)main\.go$/ },
+      FastAPI: { cli: '9a70ea43242a6bf549a5b138bb70f74ebafad7855e12eed2c1ce9bbe261f4a0d', graphql: '26926a766ee4ef8916717908fc2be03e714412c18b3f2a7df3e295ff4b5bab2f', http: /router_base\.py$/, sdlPath: 'schema.graphql', rewritten: /GENERATION-MANIFEST|README|requirements\.txt|(^|\/)app\/main\.py$/ },
+      Django: { cli: '0e0fed5d91b8bef54536dda36027b9b0c43adf0eec6fa1559dc2700631df2704', graphql: '8c99bbcc423e13c8e716e8ccc6e97bc17ab1671225721c54300707b025ba77af', http: /views_base\.py$/, sdlPath: 'schema.graphql', rewritten: /GENERATION-MANIFEST|README|requirements\.txt|config\/urls\.py/ },
+      'Spring Boot': { cli: '7bab6b86018985a9ae86afe78a6cd73da3fd437ab6f3e475022d668f65b621aa', graphql: 'd99f0e852779955c230f631526f41574853b2e28b9b00993f6baee644f7167a1', http: /ControllerBase\.java$/, sdlPath: 'backend/src/main/resources/graphql/schema.graphqls', rewritten: /GENERATION-MANIFEST|README|pom\.xml/ },
+    };
+    let sdlAcrossStacks: string | null = null;
+    for (const backend of ['Go', 'FastAPI', 'Django', 'Spring Boot']) {
+      const cfg = STACKS[backend];
+      const apiTwin = toMap(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: 'API-only' })));
+      for (const pt of ['CLI', 'GraphQL API'] as const) {
+        const isGql = pt === 'GraphQL API';
+        const a = hashFiles(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: pt })));
+        const b = hashFiles(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: pt })));
+        const expected = isGql ? cfg.graphql : cfg.cli;
+        bake(`day36|${backend}|${pt}`, a);
+        const proj = toMap(await filesOf(buildDemoAppModel({ backend, database: 'PostgreSQL', projectType: pt })));
+        let domainId = true;
+        for (const [p, c] of apiTwin) if (proj.has(p) && !cfg.rewritten.test(p) && proj.get(p) !== c) domainId = false;
+        const removed = [...apiTwin.keys()].filter((p) => !proj.has(p));
+        const added = [...proj.keys()].filter((p) => !apiTwin.has(p));
+        const httpRemoved = removed.some((p) => cfg.http.test(p));
+        const shapeOk = isGql ? proj.has(cfg.sdlPath) && added.length > 0 : added.length > 0;
+        record(a === b && a === expected && domainId && httpRemoved && shapeOk,
+          `${backend.padEnd(11)} ${pt.padEnd(11)} twice-identical == baseline; domain byte-identical to api-only twin; ${isGql ? 'REST→schema+resolvers' : 'command layer swapped'}`,
+          a.slice(0, 16));
+        if (isGql) {
+          const sdl = proj.get(cfg.sdlPath) ?? '';
+          if (sdlAcrossStacks === null) sdlAcrossStacks = sdl;
+          else record(sdl === sdlAcrossStacks, `${backend.padEnd(11)} GraphQL SDL byte-identical to the other stacks (one shared core builder)`);
+        }
+      }
+    }
+  }
+
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
   process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);

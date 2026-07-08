@@ -1137,6 +1137,178 @@ export function generateWorkerEntityFiles(
   ];
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2) — reuse the domain BYTE-IDENTICALLY and
+// swap the HTTP router layer (router_base.py + the dev routes.py) for:
+//   - CLI:     commands.py — a _run(op, args) CRUD switch over the domain service.
+//   - GraphQL: graphql.py  — register(query, mutation): ariadne resolvers over the service.
+// The shell aggregates them (app/commands.py / app/resolvers.py); schema.graphql is
+// the SHARED core-built SDL.
+// ---------------------------------------------------------------------------
+
+/** The CLI command slice for one entity (commands.py) — a CRUD switch over the domain service. */
+function buildCliCommands(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const owner = ctx.multiUser ? ', 0' : '';
+  const listArgs = ctx.multiUser ? 'db, 0' : 'db';
+  const createArgs = ctx.multiUser ? 'db, data, 0' : 'db, data';
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `CLI commands for ${name}: CRUD ops calling the SAME domain service the HTTP API`,
+    `used (service.py). No HTTP route — app/cli.py dispatches "<entity> <op>".`,
+    `"""`,
+    `from ...db import SessionLocal`,
+    `from .schemas import ${name}Create, ${name}Read`,
+    `from .service import ${slug}_service`,
+    ``,
+    ``,
+    `def _dump(obj):`,
+    `    return ${name}Read.model_validate(obj).model_dump() if obj is not None else None`,
+    ``,
+    ``,
+    `def _run(op: str, args: dict):`,
+    `    """Execute one CLI op for ${name}. args = {"id": ..., "body": {...}}."""`,
+    `    db = SessionLocal()`,
+    `    try:`,
+    `        if op == "list":`,
+    `            return [_dump(x) for x in ${slug}_service.list(${listArgs})]`,
+    `        if op == "get":`,
+    `            return _dump(${slug}_service.get(db, int(args["id"])${owner}))`,
+    `        if op == "create":`,
+    `            data = ${name}Create(**args.get("body", {})).model_dump()`,
+    `            return _dump(${slug}_service.create(${createArgs}))`,
+    `        if op == "update":`,
+    `            data = ${name}Create(**args.get("body", {})).model_dump()`,
+    `            return _dump(${slug}_service.update(db, int(args["id"]), data${owner}))`,
+    `        if op == "delete":`,
+    `            ${slug}_service.delete(db, int(args["id"])${owner})`,
+    `            return {"deleted": int(args["id"])}`,
+    `        raise ValueError(f"unknown op: {op}")`,
+    `    finally:`,
+    `        db.close()`,
+    ``,
+    ``,
+    `commands = {"${slug}": _run}`,
+    ``,
+  ].join('\n');
+}
+
+/** The GraphQL resolver slice for one entity (graphql.py) — ariadne resolvers over the service. */
+function buildGraphqlEntityResolvers(entity: Entity, ctx: EntityCodegenContext): string {
+  const name = entity.name;
+  const slug = entitySlug(entity);
+  const { single, plural } = graphqlNames(entity);
+  const owner = ctx.multiUser ? ', 0' : '';
+  const listArgs = ctx.multiUser ? 'db, 0' : 'db';
+  const createArgs = ctx.multiUser ? 'db, data, 0' : 'db, data';
+  return [
+    `"""THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ``,
+    `GraphQL resolvers for ${name}: query/mutation resolvers calling the SAME domain`,
+    `service the HTTP API used (service.py). No HTTP route — the shell (app/resolvers.py)`,
+    `registers them on the shared ariadne Query/Mutation types.`,
+    `"""`,
+    `from ...db import SessionLocal`,
+    `from .schemas import ${name}Create, ${name}Read`,
+    `from .service import ${slug}_service`,
+    ``,
+    ``,
+    `def _dump(obj):`,
+    `    return ${name}Read.model_validate(obj).model_dump() if obj is not None else None`,
+    ``,
+    ``,
+    `def register(query, mutation):`,
+    `    @query.field("${plural}")`,
+    `    def _list(*_):`,
+    `        db = SessionLocal()`,
+    `        try:`,
+    `            return [_dump(x) for x in ${slug}_service.list(${listArgs})]`,
+    `        finally:`,
+    `            db.close()`,
+    ``,
+    `    @query.field("${single}")`,
+    `    def _get(_obj, _info, id):`,
+    `        db = SessionLocal()`,
+    `        try:`,
+    `            return _dump(${slug}_service.get(db, int(id)${owner}))`,
+    `        finally:`,
+    `            db.close()`,
+    ``,
+    `    @mutation.field("create${name}")`,
+    `    def _create(_obj, _info, input):`,
+    `        db = SessionLocal()`,
+    `        try:`,
+    `            data = ${name}Create(**input).model_dump()`,
+    `            return _dump(${slug}_service.create(${createArgs}))`,
+    `        finally:`,
+    `            db.close()`,
+    ``,
+    `    @mutation.field("update${name}")`,
+    `    def _update(_obj, _info, id, input):`,
+    `        db = SessionLocal()`,
+    `        try:`,
+    `            data = ${name}Create(**input).model_dump()`,
+    `            return _dump(${slug}_service.update(db, int(id), data${owner}))`,
+    `        finally:`,
+    `            db.close()`,
+    ``,
+    `    @mutation.field("delete${name}")`,
+    `    def _delete(_obj, _info, id):`,
+    `        db = SessionLocal()`,
+    `        try:`,
+    `            ${slug}_service.delete(db, int(id)${owner})`,
+    `            return True`,
+    `        finally:`,
+    `            db.close()`,
+    ``,
+  ].join('\n');
+}
+
+/** GraphQL query/mutation field names for an entity — MUST match core/graphql-sdl.ts. */
+function graphqlNames(entity: Entity): { single: string; plural: string } {
+  const single = entity.name.charAt(0).toLowerCase() + entity.name.slice(1);
+  return { single, plural: `${single}s` };
+}
+
+/** Domain files shared by CLI/GraphQL (byte-identical to the api-only twin). */
+function pyDomainEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  const slug = entitySlug(entity);
+  const dir = `app/entities/${slug}`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+  return [
+    { relPath: `${dir}/__init__.py`, content: '', ownership: 'thraksha' },
+    { relPath: `${dir}/model.py`, content: buildModel(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/schemas.py`, content: buildSchemas(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/repository.py`, content: buildRepository(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/service_base.py`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `migrations/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${dir}/service.py`, content: buildServiceDev(entity), ownership: 'developer' },
+  ];
+}
+
+/** CLI entity file set (Day 36): domain (byte-identical) + commands.py. */
+export function generateCliEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  return [
+    ...pyDomainEntityFiles(entity, ctx),
+    { relPath: `app/entities/${slug}/commands.py`, content: buildCliCommands(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+/** GraphQL entity file set (Day 36): domain (byte-identical) + graphql.py. */
+export function generateGraphqlEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  for (const f of entity.fields) assertSupported(f);
+  const slug = entitySlug(entity);
+  return [
+    ...pyDomainEntityFiles(entity, ctx),
+    { relPath: `app/entities/${slug}/graphql.py`, content: buildGraphqlEntityResolvers(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
 /**
  * architectureDepth: 'simple' file set (Day 13) — flatter: no repository.py;
  * service_base.py + router_base.py merged into crud_base.py. The developer seam

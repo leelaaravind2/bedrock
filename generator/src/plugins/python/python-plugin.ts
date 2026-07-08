@@ -22,9 +22,12 @@ import {
   generateEntityFiles,
   generateSimpleEntityFiles,
   generateWorkerEntityFiles,
+  generateCliEntityFiles,
+  generateGraphqlEntityFiles,
   describeEntityDefaults as describePythonEntityDefaults,
   type EntityCodegenContext,
 } from './entity-codegen.js';
+import { buildCanonicalSdl } from '../../core/graphql-sdl.js';
 
 // This file compiles to dist/plugins/python/python-plugin.js; its templates live
 // at generator/plugins/python/templates (three levels up from dist/), so every
@@ -560,6 +563,165 @@ function addWorkerReadmePy(raw: string, kind: 'cron' | 'queue'): string {
   return raw.trimEnd() + '\n' + lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2). CLI swaps the ASGI entrypoint for an
+// argparse CLI (stdlib — NO dep); GraphQL swaps it for a single /graphql ASGI app
+// (ariadne — a GATED requirements dep) over the SHARED deterministic schema.graphql.
+// A LITERAL BYPASS otherwise. Generation-only.
+// ---------------------------------------------------------------------------
+
+/** CLI entrypoint (app/cli.py): argparse dispatch, run-to-exit (stdlib). */
+const CLI_ENTRYPOINT_PY = [
+  `"""Entry point (CLI): parse "<entity> <op> [--id N] [--json '{...}']", dispatch,`,
+  `print the JSON result, and exit. Stdlib argparse — NO dependency. Run:`,
+  `python -m app.cli`,
+  `"""`,
+  `import argparse`,
+  `import json`,
+  ``,
+  `from . import migrate, seed`,
+  `from .commands import commands`,
+  ``,
+  ``,
+  `def main() -> None:`,
+  `    parser = argparse.ArgumentParser(prog="cli")`,
+  `    parser.add_argument("entity")`,
+  `    parser.add_argument("op")`,
+  `    parser.add_argument("--id", default=None)`,
+  `    parser.add_argument("--json", dest="body", default="{}")`,
+  `    args = parser.parse_args()`,
+  ``,
+  `    migrate.run()`,
+  `    seed.run()`,
+  ``,
+  `    handler = commands.get(args.entity)`,
+  `    if handler is None:`,
+  `        raise SystemExit(f"unknown entity: {args.entity}")`,
+  `    result = handler(args.op, {"id": args.id, "body": json.loads(args.body)})`,
+  `    print(json.dumps(result, indent=2, default=str))`,
+  ``,
+  ``,
+  `if __name__ == "__main__":`,
+  `    main()`,
+  ``,
+].join('\n');
+
+/** CLI command table (app/commands.py): auto-discovers per-entity command modules. */
+const CLI_COMMANDS_PY = [
+  `"""The command table (auto-discovers app/entities/<name>/commands.py) — the CLI`,
+  `analog of main.py's router auto-mount. Merges the per-entity command handlers."""`,
+  `import importlib`,
+  `import os`,
+  ``,
+  `from . import entities as entities_pkg`,
+  ``,
+  ``,
+  `def load_commands() -> dict:`,
+  `    merged = {}`,
+  `    entities_dir = os.path.dirname(entities_pkg.__file__)`,
+  `    if os.path.isdir(entities_dir):`,
+  `        for name in sorted(os.listdir(entities_dir)):`,
+  `            cmd_file = os.path.join(entities_dir, name, "commands.py")`,
+  `            if os.path.isfile(cmd_file):`,
+  `                module = importlib.import_module(f"app.entities.{name}.commands")`,
+  `                merged.update(module.commands)`,
+  `    return merged`,
+  ``,
+  ``,
+  `commands = load_commands()`,
+  ``,
+].join('\n');
+
+/** GraphQL ASGI app (app/main.py): ONE /graphql endpoint over the shared SDL (ariadne). */
+const GRAPHQL_MAIN_PY = [
+  `"""The GraphQL ASGI app: ONE /graphql endpoint over the deterministic SDL`,
+  `(schema.graphql) using ariadne. Reuses the domain layer; no REST routers. Serve`,
+  `with: uvicorn app.main:app`,
+  `"""`,
+  `import os`,
+  ``,
+  `from ariadne import make_executable_schema`,
+  `from ariadne.asgi import GraphQL`,
+  ``,
+  `from . import migrate, seed`,
+  `from .resolvers import mutation, query`,
+  ``,
+  `_here = os.path.dirname(__file__)`,
+  `with open(os.path.join(_here, "..", "schema.graphql"), encoding="utf-8") as _f:`,
+  `    _sdl = _f.read()`,
+  ``,
+  `migrate.run()`,
+  `seed.run()`,
+  ``,
+  `schema = make_executable_schema(_sdl, query, mutation)`,
+  `app = GraphQL(schema)`,
+  ``,
+].join('\n');
+
+/** GraphQL resolver registry (app/resolvers.py): auto-discovers + registers per-entity resolvers. */
+const GRAPHQL_RESOLVERS_PY = [
+  `"""The resolver registry (auto-discovers app/entities/<name>/graphql.py) — the`,
+  `GraphQL analog of main.py's router auto-mount. Each entity registers its`,
+  `resolvers on the shared Query/Mutation types (sorted, deterministic)."""`,
+  `import importlib`,
+  `import os`,
+  ``,
+  `from ariadne import MutationType, QueryType`,
+  ``,
+  `from . import entities as entities_pkg`,
+  ``,
+  `query = QueryType()`,
+  `mutation = MutationType()`,
+  ``,
+  ``,
+  `def register_all() -> None:`,
+  `    entities_dir = os.path.dirname(entities_pkg.__file__)`,
+  `    if os.path.isdir(entities_dir):`,
+  `        for name in sorted(os.listdir(entities_dir)):`,
+  `            gql_file = os.path.join(entities_dir, name, "graphql.py")`,
+  `            if os.path.isfile(gql_file):`,
+  `                module = importlib.import_module(f"app.entities.{name}.graphql")`,
+  `                module.register(query, mutation)`,
+  ``,
+  ``,
+  `register_all()`,
+  ``,
+].join('\n');
+
+/** Add ariadne to requirements.txt (GraphQL only) — a gated GENERATED-PROJECT dep. */
+function addAriadneRequire(raw: string): string {
+  return raw.trimEnd() + '\n' + 'ariadne==0.23.0\n';
+}
+
+/** Append a truthful CLI/GraphQL section to the FastAPI README. */
+function addEndpointReadmePy(raw: string, kind: 'cli' | 'graphql'): string {
+  const lines =
+    kind === 'cli'
+      ? [
+          ``,
+          `## CLI (project type: CLI)`,
+          ``,
+          `This is a **command-line tool**, not an HTTP server: \`app/cli.py\` parses`,
+          `\`python -m app.cli <entity> <op> [--id N] [--json '{...}']\` (stdlib \`argparse\` —`,
+          `**no dependency**), runs migrations + seed, dispatches via \`app/commands.py\``,
+          `(auto-discovers \`app/entities/<name>/commands.py\`), prints the JSON result, and`,
+          `exits. Commands reuse the SAME domain services the HTTP API would.`,
+          ``,
+        ]
+      : [
+          ``,
+          `## GraphQL API (project type: GraphQL API)`,
+          ``,
+          `This exposes **one GraphQL endpoint**, \`/graphql\`, instead of the REST routes.`,
+          `\`schema.graphql\` is the deterministic SDL (shared across stacks); \`app/main.py\` is`,
+          `an \`ariadne\` ASGI app over it, and \`app/resolvers.py\` registers the per-entity`,
+          `resolvers (\`app/entities/<name>/graphql.py\`), which call the SAME domain services`,
+          `the HTTP API would. Serve with \`uvicorn app.main:app\`.`,
+          ``,
+        ];
+  return raw.trimEnd() + '\n' + lines.join('\n');
+}
+
 /** Construct the Python (FastAPI) backend plugin. */
 export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPlugin {
   const templatesDir = options.templatesDir ?? DEFAULT_TEMPLATES_DIR;
@@ -583,16 +745,25 @@ export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPl
       const projectType = model.getPhaseASettings().projectType;
       const workerKind: 'cron' | 'queue' | null =
         projectType === 'Cron Worker' ? 'cron' : projectType === 'Queue Consumer' ? 'queue' : null;
+      // Day 36: CLI + GraphQL also swap the ASGI entrypoint (app/main.py). CLI is
+      // frontendless stdlib; GraphQL adds ariadne. A LITERAL BYPASS otherwise.
+      const endpointKind: 'cli' | 'graphql' | null =
+        projectType === 'CLI' ? 'cli' : projectType === 'GraphQL API' ? 'graphql' : null;
       const files: GeneratedFile[] = [];
       for (const tf of await walk(templatesDir)) {
         const relRaw = path.relative(templatesDir, tf).split(path.sep).join('/');
-        // Worker types swap the HTTP entrypoint: skip app/main.py (the router
-        // auto-mount / route table); every other template is domain shell, reused.
-        if (workerKind && relRaw === 'app/main.py') continue;
+        // Worker/CLI types swap the HTTP entrypoint: skip app/main.py (the router
+        // auto-mount / route table). GraphQL REPLACES app/main.py with its own ASGI app
+        // (below), so it also skips the template main.py.
+        if ((workerKind || endpointKind) && relRaw === 'app/main.py') continue;
         let raw = (await fs.readFile(tf, 'utf8')).replace(/\r\n?/g, '\n'); // LD-1: normalize to LF at read → generator guarantees LF emission (no-op on today's LF templates)
         if (workerKind) {
           if (relRaw === 'requirements.txt' && workerKind === 'queue') raw = addPikaRequire(raw);
           else if (relRaw === 'README.md') raw = addWorkerReadmePy(raw, workerKind);
+        }
+        if (endpointKind) {
+          if (relRaw === 'requirements.txt' && endpointKind === 'graphql') raw = addAriadneRequire(raw);
+          else if (relRaw === 'README.md') raw = addEndpointReadmePy(raw, endpointKind);
         }
         if (email) {
           if (relRaw === 'app/config.py') raw = addSmtpConfig(raw);
@@ -628,6 +799,20 @@ export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPl
         files.push({ relPath: 'app/dispatcher.py', content: applyTokens(QUEUE_DISPATCHER_PY, tokens), ownership: 'thraksha' });
         files.push({ relPath: 'app/broker.py', content: applyTokens(QUEUE_BROKER_PY, tokens), ownership: 'thraksha' });
       }
+      // Day 36: the CLI / GraphQL entrypoint + route-table shell (in place of the
+      // skipped app/main.py). The per-entity command/resolver comes from generateEntity.
+      if (endpointKind === 'cli') {
+        files.push({ relPath: 'app/cli.py', content: applyTokens(CLI_ENTRYPOINT_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'app/commands.py', content: applyTokens(CLI_COMMANDS_PY, tokens), ownership: 'thraksha' });
+      } else if (endpointKind === 'graphql') {
+        files.push({ relPath: 'app/main.py', content: applyTokens(GRAPHQL_MAIN_PY, tokens), ownership: 'thraksha' });
+        files.push({ relPath: 'app/resolvers.py', content: applyTokens(GRAPHQL_RESOLVERS_PY, tokens), ownership: 'thraksha' });
+        files.push({
+          relPath: 'schema.graphql',
+          content: buildCanonicalSdl(model.getEntities(), { multiUser: model.getPhaseASettings().multiUser === true, naming: model.getStyle().namingConvention }),
+          ownership: 'thraksha',
+        });
+      }
       return files;
     },
 
@@ -642,6 +827,10 @@ export function createPythonPlugin(options: PythonPluginOptions = {}): BackendPl
       // reusing the domain files byte-identically. A LITERAL BYPASS otherwise.
       if (context.projectType === 'Cron Worker') return generateWorkerEntityFiles(entity, ctx, 'cron');
       if (context.projectType === 'Queue Consumer') return generateWorkerEntityFiles(entity, ctx, 'queue');
+      // Day 36: CLI + GraphQL swap the entity HTTP router layer for a command /
+      // resolver slice, reusing the domain files byte-identically.
+      if (context.projectType === 'CLI') return generateCliEntityFiles(entity, ctx);
+      if (context.projectType === 'GraphQL API') return generateGraphqlEntityFiles(entity, ctx);
       // Day 13: architectureDepth branches the FILE SET. 'default' is a literal
       // bypass (generateEntityFiles untouched → the 20 hashes are frozen).
       return context.style.architectureDepth === 'simple'

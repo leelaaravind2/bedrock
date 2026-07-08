@@ -969,6 +969,191 @@ export function generateWorkerEntityFiles(
   ];
 }
 
+// ---------------------------------------------------------------------------
+// CLI + GraphQL archetypes (Day 36, pass 2) — reuse the domain BYTE-IDENTICALLY and
+// swap the HTTP controller layer (<Name>ControllerBase + the dev <Name>Controller) for:
+//   - CLI:     <Name>Command.java — an EntityCommand @Component (CommandLineRunner
+//              dispatch), CRUD over the SAME repository + Dto the REST API used. No dep.
+//   - GraphQL: <Name>GraphqlController.java — a @Controller with @QueryMapping /
+//              @MutationMapping over the repository + Dto (spring-graphql, SDL-first).
+// Both are component-scanned (the worker analog of an auto-registered @RestController).
+// They reuse the domain REPOSITORY + DTO directly (not the request-scoped service,
+// which needs a SecurityContext a CLI/GraphQL system context lacks).
+// ---------------------------------------------------------------------------
+
+/** GraphQL query/mutation field names — MUST match core/graphql-sdl.ts. */
+function springGraphqlNames(entity: Entity): { single: string; plural: string } {
+  const single = entity.name.charAt(0).toLowerCase() + entity.name.slice(1);
+  return { single, plural: `${single}s` };
+}
+
+/** The GraphQL resolver controller for one entity (<Name>GraphqlController.java). */
+function buildGraphqlController(entity: Entity, ctx: EntityCodegenContext): string {
+  const pkg = `${ctx.packageName}.${entitySegment(entity)}`;
+  const name = entity.name;
+  const { single, plural } = springGraphqlNames(entity);
+  const ownerLine = ctx.multiUser ? [`        entity.setOwnerId(0L); // system context (no request user); narrow as needed`] : [];
+  return [
+    `package ${pkg};`,
+    ``,
+    `import java.util.List;`,
+    `import org.springframework.beans.factory.annotation.Autowired;`,
+    `import org.springframework.graphql.data.method.annotation.Argument;`,
+    `import org.springframework.graphql.data.method.annotation.MutationMapping;`,
+    `import org.springframework.graphql.data.method.annotation.QueryMapping;`,
+    `import org.springframework.stereotype.Controller;`,
+    ``,
+    `/**`,
+    ` * THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ` *`,
+    ` * GraphQL resolvers for ${name}: @QueryMapping / @MutationMapping over the SAME`,
+    ` * ${name}Repository + ${name}Dto the HTTP API's service uses. No REST endpoint. The`,
+    ` * SDL is the shared schema.graphql (backend/src/main/resources/graphql). Component-`,
+    ` * scanned, like an auto-registered @RestController.`,
+    ` */`,
+    `@Controller`,
+    `public class ${name}GraphqlController {`,
+    ``,
+    `    @Autowired`,
+    `    protected ${name}Repository repository;`,
+    ``,
+    `    @QueryMapping`,
+    `    public List<${name}> ${plural}() {`,
+    `        return repository.findAll();`,
+    `    }`,
+    ``,
+    `    @QueryMapping`,
+    `    public ${name} ${single}(@Argument Long id) {`,
+    `        return repository.findById(id).orElse(null);`,
+    `    }`,
+    ``,
+    `    @MutationMapping`,
+    `    public ${name} create${name}(@Argument ${name}Dto input) {`,
+    `        ${name} entity = new ${name}();`,
+    `        input.applyTo(entity);`,
+    ...ownerLine,
+    `        return repository.save(entity);`,
+    `    }`,
+    ``,
+    `    @MutationMapping`,
+    `    public ${name} update${name}(@Argument Long id, @Argument ${name}Dto input) {`,
+    `        ${name} entity = repository.findById(id).orElseThrow();`,
+    `        input.applyTo(entity);`,
+    `        return repository.save(entity);`,
+    `    }`,
+    ``,
+    `    @MutationMapping`,
+    `    public boolean delete${name}(@Argument Long id) {`,
+    `        repository.deleteById(id);`,
+    `        return true;`,
+    `    }`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/** The CLI command for one entity (<Name>Command.java) — an EntityCommand @Component. */
+function buildCliCommand(entity: Entity, ctx: EntityCodegenContext): string {
+  const pkg = `${ctx.packageName}.${entitySegment(entity)}`;
+  const name = entity.name;
+  const slug = entitySegment(entity);
+  const ownerLine = ctx.multiUser ? [`                entity.setOwnerId(0L); // system context (no request user); narrow as needed`] : [];
+  return [
+    `package ${pkg};`,
+    ``,
+    `import java.util.Map;`,
+    `import com.fasterxml.jackson.databind.ObjectMapper;`,
+    `import org.springframework.beans.factory.annotation.Autowired;`,
+    `import org.springframework.stereotype.Component;`,
+    ``,
+    `import ${ctx.packageName}.cli.EntityCommand;`,
+    ``,
+    `/**`,
+    ` * THRAKSHA-OWNED — regenerated on every run. Do not edit.`,
+    ` *`,
+    ` * CLI command for ${name}: CRUD over the SAME ${name}Repository + ${name}Dto the HTTP`,
+    ` * API's service uses. Dispatched by CliRunner (\`<entity> <op>\`); no REST endpoint.`,
+    ` */`,
+    `@Component`,
+    `public class ${name}Command implements EntityCommand {`,
+    ``,
+    `    @Autowired`,
+    `    protected ${name}Repository repository;`,
+    ``,
+    `    private final ObjectMapper mapper = new ObjectMapper();`,
+    ``,
+    `    @Override`,
+    `    public String name() {`,
+    `        return "${slug}";`,
+    `    }`,
+    ``,
+    `    @Override`,
+    `    public Object run(String op, Map<String, String> args) throws Exception {`,
+    `        switch (op) {`,
+    `            case "list":`,
+    `                return repository.findAll();`,
+    `            case "get":`,
+    `                return repository.findById(Long.parseLong(args.get("id"))).orElse(null);`,
+    `            case "create": {`,
+    `                ${name}Dto dto = mapper.readValue(args.getOrDefault("json", "{}"), ${name}Dto.class);`,
+    `                ${name} entity = new ${name}();`,
+    `                dto.applyTo(entity);`,
+    ...ownerLine,
+    `                return repository.save(entity);`,
+    `            }`,
+    `            case "update": {`,
+    `                ${name} entity = repository.findById(Long.parseLong(args.get("id"))).orElseThrow();`,
+    `                ${name}Dto dto = mapper.readValue(args.getOrDefault("json", "{}"), ${name}Dto.class);`,
+    `                dto.applyTo(entity);`,
+    `                return repository.save(entity);`,
+    `            }`,
+    `            case "delete":`,
+    `                repository.deleteById(Long.parseLong(args.get("id")));`,
+    `                return Map.of("deleted", args.get("id"));`,
+    `            default:`,
+    `                throw new IllegalArgumentException("unknown op: " + op);`,
+    `        }`,
+    `    }`,
+    `}`,
+    ``,
+  ].join('\n');
+}
+
+/** Domain files shared by CLI/GraphQL (byte-identical to the api-only twin). */
+function springDomainEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  const javaDir = `backend/src/main/java/${ctx.packagePath}/${entitySegment(entity)}`;
+  const migrationDir = `backend/src/main/resources/db/migration`;
+  const v = ctx.migrationVersion;
+  const table = tableName(entity);
+  return [
+    { relPath: `${javaDir}/${entity.name}Base.java`, content: buildEntityBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${javaDir}/${entity.name}Repository.java`, content: buildRepository(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${javaDir}/${entity.name}Dto.java`, content: buildDto(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${javaDir}/${entity.name}ServiceBase.java`, content: buildServiceBase(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${migrationDir}/V${v}__create_${table}.sql`, content: buildMigration(entity, ctx), ownership: 'thraksha' },
+    { relPath: `${javaDir}/${entity.name}.java`, content: buildEntityClass(entity, ctx), ownership: 'developer' },
+    { relPath: `${javaDir}/${entity.name}Service.java`, content: buildServiceClass(entity, ctx), ownership: 'developer' },
+  ];
+}
+
+/** CLI entity file set (Day 36): domain (byte-identical) + <Name>Command.java. */
+export function generateCliEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  const javaDir = `backend/src/main/java/${ctx.packagePath}/${entitySegment(entity)}`;
+  return [
+    ...springDomainEntityFiles(entity, ctx),
+    { relPath: `${javaDir}/${entity.name}Command.java`, content: buildCliCommand(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
+/** GraphQL entity file set (Day 36): domain (byte-identical) + <Name>GraphqlController.java. */
+export function generateGraphqlEntityFiles(entity: Entity, ctx: EntityCodegenContext): GeneratedFile[] {
+  const javaDir = `backend/src/main/java/${ctx.packagePath}/${entitySegment(entity)}`;
+  return [
+    ...springDomainEntityFiles(entity, ctx),
+    { relPath: `${javaDir}/${entity.name}GraphqlController.java`, content: buildGraphqlController(entity, ctx), ownership: 'thraksha' },
+  ];
+}
+
 /**
  * Generate all files for one entity, each tagged with its ownership (ADR-002).
  * Pure and deterministic — same Entity + context always yields the same files.
