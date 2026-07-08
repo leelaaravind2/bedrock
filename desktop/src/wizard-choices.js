@@ -106,6 +106,27 @@ export const STEPS = [
   { id: 'auth',        label: 'Auth',         kind: 'select', options: AUTHS },
 ];
 
+// PURE inverse of buildBlueprintChoices (Eco-Day 63): a stored/loaded BlueprintChoices JSON →
+// the wizard's mutable `selections` shape, so "My projects" can re-populate the wizard. Thin
+// DATA mapping only (settings spread + entities; validation.{precision,scale} → the field's
+// precision/scale) — NO generation logic, NO engine reimplementation.
+export function choicesToSelections(choices) {
+  const s = choices.settings || {};
+  return {
+    projectName: s.projectName, projectType: s.projectType, backend: s.backend,
+    frontend: s.frontend, database: s.database, multiUser: s.multiUser, auth: s.auth,
+    entities: (choices.entities || []).map((e) => ({
+      name: e.name,
+      fields: (e.fields || []).map((f) => ({
+        name: f.name, type: f.type, required: !!f.required, unique: !!f.unique,
+        precision: f.validation && f.validation.precision != null ? f.validation.precision : '',
+        scale: f.validation && f.validation.scale != null ? f.validation.scale : '',
+      })),
+      relationships: (e.relationships || []).map((r) => ({ kind: r.kind, target: r.target })),
+    })),
+  };
+}
+
 // Factory for a fresh wizard entity (the mutable UI shape; toEntitySpec serializes it).
 export function newEntity(name) {
   return { name: name || 'Entity', fields: [{ name: 'title', type: 'String', required: true }], relationships: [] };

@@ -9,13 +9,18 @@
 // layout-preserved resources; import.meta.url resolves the templates unchanged.
 
 // The local blueprint store (Eco-Day 8, Option A) — SQLite on the shell side; the
-// generator stays pure Node. Wired as a module now; a UI drives it later.
+// generator stays pure Node. Now driven by the Eco-Day 63 store commands below.
 pub mod blueprint_store;
 
 // The command surface (Eco-Day 52) — the Phase-4 generator surfaces + detect, exposed as
 // THIN INVOKERS of the bundled-node sidecar (no generation logic in Rust). run_sidecar is
 // the shared spawn/capture primitive; the setup() self-test below goes through it too.
 pub mod commands;
+
+// The blueprint-store commands (Eco-Day 63) — SHELL-SIDE SQLite persistence (save/load/list).
+// Kept SEPARATE from commands.rs: these are in-proc storage ops (Result<T, String>), NOT
+// sidecar spawns (SidecarResult). Additive — they do not touch run_sidecar or the self-test.
+pub mod store_commands;
 
 /// Where the sidecar's stdout (the 44 DIGEST lines) is written for the gate.
 fn digest_out_path() -> std::path::PathBuf {
@@ -35,6 +40,10 @@ pub fn run() {
             commands::impact_preview,
             commands::flow_map,
             commands::detect_toolchains,
+            // Eco-Day 63 — shell-side blueprint store (additive; separate from the invokers above).
+            store_commands::save_blueprint,
+            store_commands::load_blueprint,
+            store_commands::list_blueprints,
         ])
         .setup(|app| {
             // Startup self-test (Eco-Day 9, load-bearing): run the digest emitter through

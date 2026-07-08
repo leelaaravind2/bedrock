@@ -40,6 +40,9 @@
       label.chk { display: inline-flex; align-items: center; gap: 0.15rem; font-size: 0.72rem; opacity: 0.85; width: auto; margin: 0; }
       button.danger { border-color: #c62828; color: #c62828; }
       button.danger:hover { background: #c6282814; }
+      .projects { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.4rem; }
+      .projects .project-item { text-align: left; font-size: 0.78rem; }
+      .projects .empty { font-size: 0.72rem; opacity: 0.6; }
       details.advanced { margin-top: 0.5rem; }
       details.advanced summary { cursor: pointer; font-size: 0.82rem; opacity: 0.8; padding: 0.3rem 0; }
       .panel { border: 1px solid #8883; border-radius: 8px; padding: 0.6rem; margin: 0.5rem 0; }
@@ -75,6 +78,13 @@
             <button class="ghost" id="wizard-back">Back</button>
             <button id="wizard-next">Next</button>
           </div>
+        </div>
+
+        <!-- My projects: the saved blueprints (SQLite store, Eco-Day 63) — load one back. -->
+        <div class="card">
+          <h2>My projects</h2>
+          <div id="projects-list" class="projects"><!-- injected --></div>
+          <button class="ghost" id="projects-refresh">Refresh</button>
         </div>
 
         <!-- Advanced: the raw command harness (scan / flow-map / impact / detect + raw --model). -->

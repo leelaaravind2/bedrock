@@ -12,7 +12,7 @@
 // a completed run as DATA (0 = clean; 1 on a scan = findings; other = informational).
 
 import {
-  buildBlueprintChoices, TEMPLATES, STEPS, FIELD_TYPES, RELATIONSHIP_KINDS,
+  buildBlueprintChoices, choicesToSelections, TEMPLATES, STEPS, FIELD_TYPES, RELATIONSHIP_KINDS,
   newEntity, newField, newRelationship, TEAMTRACKER_EXAMPLE,
 } from './wizard-choices.js';
 
@@ -174,8 +174,46 @@ function renderReview() {
     rows +
     `<div class="review-row"><span>entities</span><span>${nEnt}</span></div>` +
     `<pre class="choices" id="choices-json">${escapeHtml(JSON.stringify(choices, null, 2))}</pre>` +
+    `<button id="save-project">Save project</button> ` +
     `<label>Export to folder</label><input id="target-dir" placeholder="C:\\path\\to\\output" />` +
     `<p class="hint">Generation is deterministic — same choices, same code.${nEnt === 0 ? ' (Settings-only shell — add entities in the Data model step for a full app.)' : ''}</p>`;
+  document.getElementById('save-project').addEventListener('click', saveProject);
+}
+
+// ─── the blueprint store (Eco-Day 63) — save / list / load; thin client over the commands ──
+async function saveProject() {
+  const invoke = tauriInvoke();
+  const choices = buildBlueprintChoices(selections);
+  if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to save. (The assembled BlueprintChoices is shown above.)'); return; }
+  setStatus(`Saving ${selections.projectName}…`);
+  try {
+    const id = await invoke('save_blueprint', { name: selections.projectName, modelJson: JSON.stringify(choices) });
+    setStatus(`Saved "${selections.projectName}" as #${id}.`);
+    setOutput('clean', 'Saved', `Project "${selections.projectName}" persisted to your local store (id #${id}).`);
+    refreshProjects();
+  } catch (err) { setStatus('save: storage error'); setOutput('env-error', 'save_blueprint — storage error', String(err)); }
+}
+async function refreshProjects() {
+  const invoke = tauriInvoke();
+  const list = document.getElementById('projects-list');
+  if (!list) return;
+  if (!invoke) { list.innerHTML = '<span class="empty">(open inside Bedrock to see saved projects)</span>'; return; }
+  try {
+    const rows = await invoke('list_blueprints');
+    list.textContent = '';
+    if (!rows.length) { list.innerHTML = '<span class="empty">(no saved projects yet)</span>'; return; }
+    for (const r of rows) list.append(h('button', { class: 'ghost project-item', onclick: () => loadProject(r.id) }, `${r.name} · #${r.id} · ${r.created_at}`));
+  } catch (err) { list.innerHTML = `<span class="empty">list error: ${escapeHtml(String(err))}</span>`; }
+}
+async function loadProject(id) {
+  const invoke = tauriInvoke();
+  if (!invoke) return;
+  try {
+    const json = await invoke('load_blueprint', { id });
+    Object.assign(selections, choicesToSelections(JSON.parse(json)));
+    stepIndex = REVIEW_STEP; renderStep();
+    setStatus(`Loaded "${selections.projectName}" (#${id}). Review or edit, then Generate / Save.`);
+  } catch (err) { setStatus('load: storage error'); setOutput('env-error', 'load_blueprint — storage error', String(err)); }
 }
 
 function captureCurrentStep() {
@@ -252,6 +290,8 @@ function init() {
   document.getElementById('wizard-next').addEventListener('click', wizardNext);
   document.getElementById('wizard-back').addEventListener('click', wizardBack);
   renderStep();
+  document.getElementById('projects-refresh').addEventListener('click', refreshProjects);
+  refreshProjects();
   for (const btn of document.querySelectorAll('button[data-cmd]')) btn.addEventListener('click', () => runCommand(btn));
   if (!tauriInvoke()) setStatus('note: Tauri backend not detected (open inside Bedrock to generate). The wizard + the assembled BlueprintChoices still work.');
 }
