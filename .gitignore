@@ -11,6 +11,9 @@
 !/.gitignore
 !/.gitattributes
 !/CLAUDE.md
+!/README.md
+!/CAPABILITIES.md
+!/RELEASE-NOTES.md
 
 **/node_modules/
 **/dist/

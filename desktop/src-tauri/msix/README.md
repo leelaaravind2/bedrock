@@ -1,44 +1,52 @@
-# Bedrock — the MSIX packaging path (the wrap recipe)
+# Bedrock — the Store-submission runbook (MSIX go-live)
 
 **Release scope (LOCKED):** Bedrock ships **FREE via the Microsoft Store as an MSIX** —
 **Microsoft signs at certification** (NO cert / EV / token / notarization). **Windows-only.**
 
-MSIX is **not** a Tauri v2 bundle target (`tauri build` produces `msi` / `nsis` only). The Store
-package is an **external wrap** of the Tauri build payload: lay out an MSIX payload dir with
-[`AppxManifest.xml`](AppxManifest.xml) + the built app + the bundled sidecar + `resources/gen`, then
-run the Windows SDK `MakeAppx.exe pack`.
+This is the authoritative **go-live runbook**: the four ordered steps that take the certified,
+release-ready system (Eco-Day 58) to the Store. **These steps run on Leela's Windows machine + Partner
+Center — NOT the dev shell.** This document is the **recipe**; none of the four steps is claimed done.
 
-## Build-here vs. deferred (honest)
+MSIX is **not** a Tauri v2 bundle target (`tauri build` produces `msi`/`nsis`). The Store package is an
+**external wrap** of the Tauri build payload via the Windows SDK `MakeAppx.exe`.
 
-| Step | Where |
-|---|---|
-| Author `AppxManifest.xml` (identity = Bedrock, `runFullTrust`, payload) + this recipe | **Build-here (done, Eco-Day 55)** — XML validated well-formed |
-| `tauri build --bundles msi nsis` with the Bedrock identity | **Build-here** (if WiX/NSIS cached & disk allows) — else honest-manual |
-| `MakeAppx.exe pack` → `Bedrock.msix` | **DEFERRED** — Windows SDK / `MakeAppx` not on the dev shell → Leela's Windows machine |
-| Packaged launch + sidecar-under-MSIX check | **DEFERRED** — clean Win 11 box → Leela's machine |
-| Store submission (Microsoft signs at cert) | **DEFERRED** — Partner Center → Leela |
+---
 
-## Placeholders (Partner-Center-assigned — fill before wrapping, do NOT invent)
+## ⚠ The name ↔ identity dependency (read before starting — two wrap passes)
 
-| Placeholder in `AppxManifest.xml` | Source |
+Step 3 (name reservation) is what **assigns** the `AppxManifest.xml` Identity values (`Name`, `Publisher`,
+`PublisherDisplayName`) that the **Store** package needs. So there are **two wrap passes**:
+
+- **Local-TEST wrap** (for step 2): use **placeholder/dev identity + a self-signed cert** → a `.msix` you
+  can sideload and launch to verify the app works. **This build is NOT for the Store.**
+- **SUBMISSION wrap** (for step 4): after the name is reserved (step 3), substitute the **real** assigned
+  identity and re-pack → the `.msix` you submit. **Microsoft signs this at certification.**
+
+**Recommended order:** reserve the name (**step 3**) EARLY to get the identity; run the local-test wrap
+(steps 1–2) in parallel to prove the packaged app; then do the submission wrap and submit (**step 4**).
+
+**Placeholders in [`AppxManifest.xml`](AppxManifest.xml)** (Partner-Center-assigned — do NOT invent):
+
+| Placeholder | Source (step 3) |
 |---|---|
 | `{{STORE_IDENTITY_NAME}}` | Partner Center → the reserved app's **Package/Identity/Name** |
-| `{{STORE_PUBLISHER_CN}}` | Partner Center → the app's **Package/Identity/Publisher** (`CN=…`) |
+| `{{STORE_PUBLISHER_CN}}` | Partner Center → **Package/Identity/Publisher** (`CN=…`) |
 | `{{PUBLISHER_DISPLAY_NAME}}` | Partner Center → **Publisher display name** |
 
-> **The "Bedrock" name is NOT reserved.** It is a very common word (Minecraft Bedrock, AWS Bedrock,
-> Bedrock Linux) → likely a Store conflict. The name-availability check + reservation is on Leela's
-> Partner Center. Prepare a variant (Bedrock Studio / Bedrock Forge / Thraksha Bedrock) if taken.
+---
 
-## The reproducible recipe (run on a Windows machine with the Windows SDK — NOT the dev shell)
+## Step 1 — the MakeAppx MSIX wrap
+
+**Input:** the Day-55 built payload. **Tool:** Windows SDK `MakeAppx.exe` (+ `SignTool` for the local test).
 
 ```powershell
-# 1. Build the Tauri payload (beforeBuildCommand re-syncs resources/gen to the certified generator).
+# 1a. Build the Tauri payload (beforeBuildCommand re-syncs resources/gen to the certified generator).
 cd desktop
 npx tauri build --bundles msi nsis
 #   → target/release/  contains  Bedrock.exe  +  node-x86_64-pc-windows-msvc.exe  +  resources/gen/**
+npm run sync-gen:check          # confirm the packaged resources/gen == the certified generator
 
-# 2. Assemble the MSIX payload dir (exe + sidecar + certified generator + manifest + assets).
+# 1b. Assemble the MSIX payload dir (exe + sidecar + certified generator + manifest + logos).
 $payload = "build/msix-payload"
 New-Item -ItemType Directory -Force $payload
 Copy-Item target/release/Bedrock.exe                          $payload/
@@ -47,22 +55,79 @@ Copy-Item target/release/resources                            $payload/resources
 Copy-Item src-tauri/msix/AppxManifest.xml                     $payload/
 # Copy-Item <tile/store logos>                                $payload/assets/   # per VisualElements
 
-# 3. Pack the MSIX (Windows SDK MakeAppx).
-MakeAppx.exe pack /d $payload /p Bedrock.msix
+# 1c. Substitute the AppxManifest Identity placeholders:
+#     - LOCAL-TEST wrap  → dev/placeholder Name + Publisher (matching your self-signed cert subject).
+#     - SUBMISSION wrap  → the REAL {{STORE_IDENTITY_NAME}} / {{STORE_PUBLISHER_CN}} /
+#                          {{PUBLISHER_DISPLAY_NAME}} from Partner Center (step 3).
 
-# 4. (LOCAL sideload TEST only — NOT for the Store) sign with a dev self-signed cert, trust it, install:
-#    SignTool sign /fd SHA256 /a /f dev-cert.pfx /p <pw> Bedrock.msix
-#    Add-AppxPackage Bedrock.msix
-#    → the Store submission needs NO signing — Microsoft signs at certification.
+# 1d. Pack the MSIX.
+MakeAppx.exe pack /d build/msix-payload /p Bedrock.msix
 
-# 5. Submit Bedrock.msix to Partner Center → Microsoft signs at certification.
+# 1e. (LOCAL sideload TEST only — NOT the Store signature) sign + trust for local install:
+#     SignTool sign /fd SHA256 /a /f dev-cert.pfx /p <pw> Bedrock.msix
+#     → The Store submission needs NO signing — Microsoft signs at certification.
 ```
 
-## Payload contents (what the wrap MUST include)
+**Done-check:** `Bedrock.msix` produced; `sync-gen:check` confirmed the packaged `resources/gen` ==
+certified **before** wrapping.
+
+---
+
+## Step 2 — the packaged launch + sidecar-under-MSIX test
+
+Sideload the **local-test** `.msix` and verify the app works end-to-end packaged (not just `tauri dev`).
+
+```powershell
+Add-AppxPackage .\Bedrock.msix       # sideload (dev cert must be trusted)
+# Launch Bedrock from the Start menu.
+```
+
+**Verify:**
+- The **front-end loads** (the Bedrock window, the 5 command panels).
+- The **5 commands round-trip** — the sidecar spawns under MSIX's `runFullTrust`, and the `SidecarResult`
+  renders across its branches: **clean (exit 0)** / **scan findings (exit 1, results not an error)** /
+  **env-error (rejected promise)**.
+- **Packaged determinism smoke** — the export / scan / Map surfaces work through the GUI; the packaged
+  sidecar generates identically to the certified generator (the Eco-Day 58 DC-2 property, now GUI-observed).
+
+**Done-check:** the packaged app **works end-to-end** — the sidecar spawns and generates under the MSIX
+container.
+
+---
+
+## Step 3 — the Bedrock name reservation
+
+**Partner Center → Apps → reserve the name.**
+- Reserve **"Bedrock"**. If taken (it is a very common word — Minecraft/AWS/Linux Bedrock), use a prepared
+  variant: **Bedrock Studio / Bedrock Forge / Thraksha Bedrock**.
+- Note the one-time **~$19 Partner Center registration** if the account isn't set up.
+- Feed the assigned **Identity Name / Publisher / PublisherDisplayName** into `AppxManifest.xml` (step 1c's
+  placeholders) → run the **SUBMISSION wrap** (step 1 with the real identity).
+
+**Done-check:** the name reserved + the identity values in hand + substituted into the manifest.
+
+> The "Bedrock" name is **NOT reserved** as of this release — it is an open concern flagged since Eco-Day
+> 51. Reserve it (or a variant) here.
+
+---
+
+## Step 4 — the Store submission
+
+**Partner Center → your app → new submission.**
+- Upload the **SUBMISSION-wrap** `Bedrock.msix` (real reserved identity).
+- The store listing: **description from [`/CAPABILITIES.md`](../../../CAPABILITIES.md)**, screenshots,
+  category, age rating, privacy.
+- Submit for certification → **Microsoft signs + certifies** (no cert/EV/notarization on our side).
+
+**Done-check:** submitted; then the wait for Microsoft certification.
+
+---
+
+## Payload contents (what every wrap MUST include)
 
 - `Bedrock.exe` — the Tauri app (the `Executable` / entry point in the manifest).
 - `node-x86_64-pc-windows-msvc.exe` — the **bundled node sidecar** (`externalBin`); Bedrock spawns it
   (hence `runFullTrust`).
-- `resources/gen/**` — the **certified generator copy** (`dist/` + `plugins/`); the whole product runs
-  the generator through this. Must equal the certified build (`npm run sync-gen:check`).
-- The WebView2 loader (present on Windows 11) + tile/store logos referenced by `VisualElements`.
+- `resources/gen/**` — the **certified generator copy** (`dist/` + `plugins/`); the whole product runs the
+  generator through this. Must equal the certified build (`npm run sync-gen:check`).
+- The WebView2 loader (present on Windows 11) + the tile/store logos referenced by `VisualElements`.

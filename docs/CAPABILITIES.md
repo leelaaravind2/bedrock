@@ -1,5 +1,10 @@
 # Thraksha v0.1 — Capabilities
 
+> **Historical record.** This is the **v0.1 21-day-CORE** capability record (Phases 0–1, dated
+> 2026-07-02). It is **superseded by the root [`/CAPABILITIES.md`](../CAPABILITIES.md)** — the Bedrock
+> v0.1.0 release record (the full 60-day ecosystem). This file is preserved as a dated record; its
+> limitations (§3) are still carried forward in the release record's boundary ledger.
+
 **What Thraksha v0.1 does, stated at its ACTUAL proven level.** This is the external-facing capability record. It is written to be honest by construction: **every capability cites where it was proven, at the level it was proven** (generated / booted-live-on-a-database / composed), and the complete limitations set (§3) sits in the same document — a strengths list is not read without its limitations.
 
 **Date:** 2026-07-02 · **Status:** v0.1 closed. The regression backstop is the consolidated harness (`npm run day20:regress`): 43 recorded digests + 10 TeamTracker relationship hashes + the maximal-composition digest, all frozen. See [`daily/day-20-report.md`](daily/day-20-report.md) for the certification.
