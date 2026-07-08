@@ -1281,6 +1281,45 @@ async function main(): Promise<void> {
       'default (no CI/CD) → NO .github/workflows/ci.yml artifact (additive; frozen backstop byte-identical)');
   }
 
+  // ══ PART 1t — export standalone / Law-21 static property (Eco-Day 41) ════════
+  // Export is a drift-free PROJECTION of buildFileSet output; the exported project is
+  // STANDALONE — 0 FUNCTIONAL Thraksha references (0 deps + 0 imports) and a version-pinned
+  // Dockerfile. CI-enforces the standalone property every run (a leaked Thraksha import/dep
+  // would be caught here). The inert provenance markers (ownership comments, the manifest) are
+  // ALLOWED and NOT stripped. Non-hash, additive — no frozen hash moved. Fuller live proof: bench:export.
+  process.stdout.write('\n=== PART 1t: export standalone / Law-21 static property (Eco-Day 41) ===\n');
+  {
+    // A FUNCTIONAL Thraksha ref = an import/require/dependency of a Thraksha MODULE — not an inert comment.
+    const FUNCTIONAL_IMPORT = /(?:^|\n)\s*(?:import|from|require\(|use\s)[^\n]*\bthraksha\b/i;
+    const EXPORT_STACKS: { backend: string; runtimeKey: string; dockerfile: string; manifest: string }[] = [
+      { backend: 'Express', runtimeKey: 'node', dockerfile: 'Dockerfile', manifest: 'package.json' },
+      { backend: 'Go', runtimeKey: 'go', dockerfile: 'Dockerfile', manifest: 'go.mod' },
+      { backend: 'FastAPI', runtimeKey: 'python', dockerfile: 'Dockerfile', manifest: 'requirements.txt' },
+      { backend: 'Django', runtimeKey: 'python', dockerfile: 'Dockerfile', manifest: 'requirements.txt' },
+      { backend: 'Spring Boot', runtimeKey: 'java', dockerfile: 'backend/Dockerfile', manifest: 'backend/pom.xml' },
+    ];
+    for (const s of EXPORT_STACKS) {
+      const m = buildDemoAppModel({ backend: s.backend, database: 'PostgreSQL' });
+      const files = await filesOf(m);
+      const byPath = toMap(files);
+      // Standalone: 0 Thraksha dep + 0 functional import/require (the manifest DOC is exempt from the source scan).
+      const manifestClean = !/thraksha/i.test(byPath.get(s.manifest) ?? '');
+      const sourceClean = files.every((f) => f.relPath === 'GENERATION-MANIFEST.txt' || !FUNCTIONAL_IMPORT.test(f.content));
+      // Dockerfile: the toolchain stage is pinned to the Day-11 runtime; every base is a concrete tag; no :latest.
+      const pin = m.getVersions()[s.runtimeKey];
+      const fromLines = (byPath.get(s.dockerfile) ?? '').split('\n').filter((l) => /^FROM /.test(l));
+      const dockerfilePinned = fromLines.some((l) => l.includes(pin)) && fromLines.length > 0 && fromLines.every((l) => /:[0-9]|-[0-9]/.test(l)) && !/:latest/.test(byPath.get(s.dockerfile) ?? '');
+      record(manifestClean && sourceClean && dockerfilePinned,
+        `${s.backend.padEnd(11)} standalone: 0 functional Thraksha refs (deps+imports) + Dockerfile pinned to ${s.runtimeKey} ${pin}`);
+    }
+    // The inert provenance markers ARE present (ownership comments) — they are legitimately-neutral and
+    // MUST NOT be stripped (stripping them rewrites the deterministic output → moves frozen hashes).
+    const expressFiles = await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }));
+    const hasProvenanceMarker = expressFiles.some((f) => /THRAKSHA-OWNED/.test(f.content));
+    record(hasProvenanceMarker,
+      'inert provenance markers present (THRAKSHA-OWNED comments) — allowed, NOT stripped (stripping would move frozen hashes)');
+  }
+
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
   process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);
