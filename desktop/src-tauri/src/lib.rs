@@ -40,7 +40,10 @@ pub fn run() {
             // Startup self-test (Eco-Day 9, load-bearing): run the digest emitter through
             // the SAME run_sidecar primitive the commands use, and write the 103 DIGEST
             // lines to a temp file so the byte-identical gate can diff them against the
-            // frozen baseline. The header preserves the Day-5 SIDECAR_EXIT contract.
+            // frozen baseline. The header preserves the Day-5 SIDECAR_EXIT contract —
+            // now TRUTHFUL (Eco-Day 53): it prints the REAL exit code from the structured
+            // result ({:?} on Some(0) == the exact prior passing header, byte-identical),
+            // so a non-zero emitter exit can no longer masquerade as success.
             let handle = app.handle().clone();
             let out_file = digest_out_path();
             tauri::async_runtime::spawn(async move {
@@ -51,7 +54,7 @@ pub fn run() {
                 )
                 .await
                 {
-                    Ok(stdout) => format!("SIDECAR_EXIT Some(0)\n{stdout}"),
+                    Ok(r) => format!("SIDECAR_EXIT {:?}\n{}", r.exit_code, r.stdout),
                     Err(e) => format!("ERROR: {e}"),
                 };
                 let _ = std::fs::write(&out_file, buf);
