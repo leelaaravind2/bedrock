@@ -41,6 +41,7 @@ import { emptyContent, contentFillState, type SlotContent } from './core/slot-co
 import { fillContextOf, buildFillSpecs, orchestrateFill, type SlotFiller } from './fill/fill-core.js';
 import { ingestDesignTokens, canonicalTokens, figmaEligibility } from './figma/figma-ingest.js';
 import { buildCanonicalSdl } from './core/graphql-sdl.js';
+import { buildScanSpecs, orchestrateAiScan, promptFor as aiScanPromptFor, type ScanSpec, type AdvisoryFinding, type AiSuggester } from './scan/ai-scan-core.js';
 import { aiConfigFromEnv, aiFillerFromEnv } from './fill/fill-ai.js';
 import type { GeneratedFile } from './core/plugin.js';
 
@@ -1359,6 +1360,50 @@ async function main(): Promise<void> {
     const noSec = await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' }));
     record(!noSec.some((f) => f.relPath === 'semgrep-rules.yml' || f.relPath === '.github/workflows/security.yml'),
       'default (no scan) → NO security artifacts (additive; read-only; frozen backstop byte-identical)');
+  }
+
+  // ══ PART 1v — AI-ADVISORY security scan: the PURE scan core over a FAKE suggester (Eco-Day 45) ══
+  // The developer-keyed AI scan's PURE core (buildScanSpecs/orchestrateAiScan/promptFor) is
+  // deterministic GIVEN an injected suggester — proven here with a FAKE (no AI, no key, no network),
+  // exactly like the Day-23 fill core (PART 1l). The AI output is ADVISORY (class 'advisory', never
+  // the gate) and lives OUTSIDE the backstop (the LIVE AI edge is default-off + not exercised here).
+  process.stdout.write('\n=== PART 1v: AI-advisory security scan — pure core over a FAKE suggester (Eco-Day 45) ===\n');
+  {
+    // A tiny in-memory "project" (source modules + non-code that must be skipped).
+    const projectFiles = [
+      { relPath: 'src/app.js', content: `const q = "SELECT * FROM t WHERE id=" + id;\nMath.random();\n` },
+      { relPath: 'src/db.js', content: `module.exports = { query };\n` },
+      { relPath: 'GENERATION-MANIFEST.txt', content: 'Thraksha — Generation Manifest\n' }, // must be skipped
+      { relPath: 'logo.png', content: 'binary' }, // must be skipped
+    ];
+
+    // (a) buildScanSpecs: one WHOLE-MODULE spec per source file, sorted; non-code skipped.
+    const specs = buildScanSpecs(projectFiles);
+    const specsOk = specs.length === 2 && specs[0].path === 'src/app.js' && specs[1].path === 'src/db.js' &&
+      specs[0].module.includes('SELECT * FROM') && !specs.some((s) => /MANIFEST|\.png/.test(s.path));
+    record(specsOk, 'buildScanSpecs: one whole-module spec per source file (sorted); non-code (manifest/binary) skipped');
+
+    // (b) promptFor is NEUTRAL + structured (no framing/polarity bias; permits an empty result).
+    const prompt = aiScanPromptFor(specs[0]);
+    const neutralPrompt = /Respond with ONLY a JSON array/.test(prompt) && /If there are no issues, respond with \[\]/.test(prompt) &&
+      /Do not invent issues/.test(prompt) && !/find the vulnerabilit|list all (the )?(vulnerabilit|bugs)/i.test(prompt) && prompt.includes(specs[0].module);
+    record(neutralPrompt, 'promptFor: NEUTRAL structured prompt (whole-module context; "if none → []"; "do not invent"; no leading framing)');
+
+    // (c) orchestrateAiScan over a FAKE deterministic suggester → the expected ADVISORY findings, twice-identical.
+    const fake: AiSuggester = async (s: ScanSpec): Promise<AdvisoryFinding[]> =>
+      /SELECT \* FROM.*\+/.test(s.module)
+        ? [{ path: s.path, line: 1, severity: 'high', issue: 'SQL string concatenation', suggestion: 'Use parameterized queries', class: 'advisory' }]
+        : [];
+    const run1 = await orchestrateAiScan(specs, fake);
+    const run2 = await orchestrateAiScan(specs, fake);
+    const sameTwice = JSON.stringify(run1) === JSON.stringify(run2);
+    const advisoryClass = run1.length === 1 && run1[0].class === 'advisory' && run1[0].path === 'src/app.js' && !!run1[0].suggestion;
+    record(sameTwice && advisoryClass, 'orchestrateAiScan over a FAKE suggester → deterministic ADVISORY findings (class=advisory; twice-identical)');
+
+    // (d) A THROWING suggester ⇒ no crash, no findings (graceful — advisory is optional, never the gate).
+    const boom: AiSuggester = async () => { throw new Error('model down'); };
+    const safe = await orchestrateAiScan(specs, boom);
+    record(safe.length === 0, 'orchestrateAiScan: a throwing suggester degrades to 0 findings (graceful; never a crash; never the gate)');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
