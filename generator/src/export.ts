@@ -19,14 +19,17 @@
  * regen CLI uses) — NO packaging/zip/archive library is a Thraksha dependency (deps {}).
  *
  * Build:  npm run build
- * Usage:  node dist/export.js <targetDir> [--backend <name>]
+ * Usage:  node dist/export.js <targetDir> [--backend <name>] [--model <path-or-json>]
  *           <targetDir>   where the standalone project is written (created if absent).
  *           --backend     override the model's backend (selects the plugin).
+ *           --model       a BlueprintChoices JSON (file or inline) → assembleBlueprint.
+ *                         OMITTED ⇒ the built-in demo model (the literal bypass, unchanged).
  */
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDemoAppModel } from './demoapp-model.js';
+import { readModelArg } from './core/model-arg.js';
 import { buildFileSet, applyPlan } from './core/regen.js';
 import { selectBackendPlugin } from './plugins/registry.js';
 import type { GeneratedFile } from './core/plugin.js';
@@ -49,17 +52,21 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   let targetDir: string | undefined;
   let backend: string | undefined;
+  let modelArg: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--backend') backend = argv[++i];
+    else if (a === '--model') modelArg = argv[++i];
     else if (!a.startsWith('--')) targetDir = a;
   }
   if (!targetDir) {
-    process.stderr.write('usage: node dist/export.js <targetDir> [--backend <name>]\n');
+    process.stderr.write('usage: node dist/export.js <targetDir> [--backend <name>] [--model <path-or-json>]\n');
     process.exit(2);
     return;
   }
-  const model = buildDemoAppModel(backend ? { backend } : {});
+  // --model supplied ⇒ export the REAL blueprint (via the existing assembleBlueprint path).
+  // OMITTED ⇒ the LITERAL BYPASS: the demo model (with an optional --backend override), unchanged.
+  const model = modelArg ? await readModelArg(modelArg) : buildDemoAppModel(backend ? { backend } : {});
   const projectName = model.getSetting('projectName');
   const dir = path.resolve(targetDir);
   const files = await exportProject(model, dir);
