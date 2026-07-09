@@ -144,6 +144,20 @@ pub async fn flow_map(
     run_sidecar(&app, "flow-map.js", args).await
 }
 
+/// Draw the request-lifecycle / data-flow map of a model as SVG (Eco-Day 65). → `dist/flow-svg.js`.
+/// The visual sibling of `flow_map` — same `--model` contract; the shell DISPLAYS the certified SVG.
+#[tauri::command]
+pub async fn flow_svg(
+    app: AppHandle,
+    backend: Option<String>,
+    model: Option<String>,
+) -> Result<SidecarResult, String> {
+    let mut args = vec![];
+    push_opt(&mut args, "--backend", backend);
+    push_opt(&mut args, "--model", model);
+    run_sidecar(&app, "flow-svg.js", args).await
+}
+
 /// Detect the toolchains THIS machine has for each backend. → `dist/detect-demo.js`.
 /// A SHELL-OUT to the certified `detect/probe.ts` — NOT a Rust re-probe (the thin-invoker
 /// thesis supersedes the Phase-1 "Rust probes" intent; a reimplementation would risk drift).

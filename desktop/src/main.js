@@ -237,6 +237,27 @@ function renderProjectView() {
     : 'No saved baseline yet — Save or load a project, then your edits can be previewed against it.';
 }
 
+// View the DRAWN diagram of the current wizard blueprint (Eco-Day 65). The certified engine
+// (flow_svg → renderFlowSvg(buildFlowMap)) produces the SVG; the shell is a THIN DISPLAY —
+// it inserts the certified SVG string (from our generator, not user HTML). NO JS layout, NO
+// re-derivation, NO text-parsing. The interactive impact highlight is Day 66.
+async function viewDiagram() {
+  const invoke = tauriInvoke();
+  const model = JSON.stringify(buildBlueprintChoices(selections));
+  const diagram = document.getElementById('diagram');
+  if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to view the diagram.'); return; }
+  setStatus('Drawing the diagram…');
+  try {
+    const r = await invoke('flow_svg', { model });
+    if (r.exit_code === 0 && r.stdout) {
+      diagram.innerHTML = r.stdout; // insert the CERTIFIED SVG (thin display)
+      diagram.hidden = false;
+      setStatus(`Diagram of ${selections.projectName} — drawn by the certified engine (same graph as the text flow map).`);
+      setOutput('info', 'flow_svg — diagram shown above', 'The drawn diagram is the certified flow map (a projection of your declared model). The text map is available via "Flow map (text)".');
+    } else { renderResult('flow_svg', r); }
+  } catch (err) { setStatus('flow_svg: environment error'); setOutput('env-error', 'flow_svg — environment problem (sidecar missing/broken)', String(err)); }
+}
+
 // View the flow map of the CURRENT wizard blueprint. The engine projects the declared model;
 // JS renders its stdout VERBATIM (a projection, never parsed from code — Day 50).
 async function viewFlowMap() {
@@ -339,6 +360,7 @@ function init() {
   document.getElementById('wizard-next').addEventListener('click', wizardNext);
   document.getElementById('wizard-back').addEventListener('click', wizardBack);
   renderStep();
+  document.getElementById('view-diagram').addEventListener('click', viewDiagram);
   document.getElementById('view-flow-map').addEventListener('click', viewFlowMap);
   document.getElementById('preview-impact').addEventListener('click', previewImpactOfEdit);
   renderProjectView();

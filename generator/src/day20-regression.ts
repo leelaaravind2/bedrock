@@ -33,6 +33,9 @@ import { buildTaskModel } from './task-model.js';
 import { buildFileSet, applyPlan } from './core/regen.js';
 import { previewImpact, diffFileSets, fileHash, type ImpactAction } from './map/impact-map.js';
 import { buildFlowMap, type FlowNode } from './map/flow-map.js';
+import { renderFlowSvg } from './map/flow-svg.js';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { selectBackendPlugin } from './plugins/registry.js';
 import { createProjectModel, restoreProjectModel, type ProjectModel } from './core/project-model.js';
 import { defaultCodingStyle, toSnakeCase, toCamelCase, applyNaming, type CodingStyle } from './core/style.js';
@@ -1636,6 +1639,64 @@ async function main(): Promise<void> {
     void buildFlowMap(flowModel());
     const after = hashFiles(await filesOf(buildDemoAppModel({ backend: 'Express', database: 'PostgreSQL' })));
     record(before === after, 'READ-ONLY: building a flow map emits nothing into generation (buildFileSet byte-identical before/after)');
+  }
+
+  // ══ PART 1y — THE VISUAL MAP: renderFlowSvg — deterministic + faithful drawing (Eco-Day 65) ══
+  // The visual sibling of PART 1x. renderFlowSvg(buildFlowMap(m)) DRAWS the certified FlowMap as an SVG
+  // string — it lays out + draws the declared-model projection; it decides nothing (never parses code,
+  // never re-derives the graph). NON-HASH (like PART 1x): (A) DETERMINISTIC — byte-identical twice
+  // in-process AND across a FRESH NODE PROCESS (spawn the CLI); (B) FAITHFUL — the drawn data-node-id /
+  // data-from|to|kind sets are ONE-TO-ONE with buildFlowMap's nodes/edges (= the declared model), no
+  // phantom/missing; (C) the integration LITERAL BYPASS. Bakes NO digest (103 stays 103). NEW FILES ONLY
+  // in the generator (map/flow-svg.ts + flow-svg.ts) — no existing output moved.
+  process.stdout.write('\n=== PART 1y: the visual Map — renderFlowSvg, deterministic + faithful drawing (Eco-Day 65) ===\n');
+  {
+    const flowChoices: BlueprintChoices = {
+      settings: { projectName: 'FlowApp', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' },
+      entities: [
+        { name: 'Team', fields: [{ name: 'name', type: 'String', required: true }], relationships: [{ kind: 'has-many', target: 'Ticket' }] },
+        { name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true }], relationships: [{ kind: 'belongs-to', target: 'Team' }] },
+      ],
+      integrations: { email: 'smtp', ai: 'none' },
+    };
+    const fm = buildFlowMap(assembleBlueprint(flowChoices));
+    const svg = renderFlowSvg(fm);
+
+    // (A) DETERMINISTIC (in-process): same model → byte-identical SVG (twice).
+    record(renderFlowSvg(buildFlowMap(assembleBlueprint(flowChoices))) === renderFlowSvg(buildFlowMap(assembleBlueprint(flowChoices))),
+      'visual Map DETERMINISTIC: same model → byte-identical SVG (twice — integer grid, given-order iteration, no float/timestamp/id/randomness/locale)');
+
+    // (A2) DETERMINISTIC (FRESH PROCESS): spawn the flow-svg CLI twice → identical stdout (no
+    // process-state / iteration-order leak). The CLI's --model path assembles the SAME graph.
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), 'flow-svg.js');
+    const spawnSvg = () => execFileSync(process.execPath, [cli, '--model', JSON.stringify(flowChoices)], { encoding: 'utf8' });
+    const p1 = spawnSvg();
+    const p2 = spawnSvg();
+    record(p1 === p2 && p1.trim() === svg,
+      'visual Map DETERMINISTIC (fresh process): flow-svg CLI stdout byte-identical twice AND == the in-process render');
+
+    // (B) FAITHFUL: parse OUR OWN emitted attributes (a structural read of the SVG we wrote, NOT a
+    // re-derivation of the architecture) and assert one-to-one with buildFlowMap's nodes/edges.
+    const drawnNodeIds = [...svg.matchAll(/data-node-id="([^"]+)"/g)].map((mm) => mm[1]);
+    const drawnEdges = [...svg.matchAll(/data-from="([^"]+)" data-to="([^"]+)" data-kind="([^"]+)"/g)].map((mm) => `${mm[1]}→${mm[2]}:${mm[3]}`);
+    const eqSet = (a: string[], b: string[]) => { const x = [...a].sort(); const y = [...b].sort(); return x.length === y.length && x.every((v, i) => v === y[i]); };
+    const modelNodeIds = fm.nodes.map((n) => n.id);
+    const modelEdges = fm.edges.map((e) => `${e.from}→${e.to}:${e.kind}`);
+    // one drawn box per FlowMap node; one drawn arrow per FlowMap edge; no phantom, no missing.
+    const nodesFaithful = eqSet(drawnNodeIds, modelNodeIds) && drawnNodeIds.length === new Set(drawnNodeIds).size;
+    const edgesFaithful = eqSet(drawnEdges, modelEdges) && drawnEdges.length === new Set(drawnEdges).size;
+    record(nodesFaithful && edgesFaithful,
+      'visual Map FAITHFUL: drawn data-node-id/data-edge sets one-to-one with buildFlowMap (= the declared entities/relationships) — no phantom, no missing',
+      `${drawnNodeIds.length}n/${drawnEdges.length}e`);
+
+    // (C) INTEGRATION LITERAL BYPASS: no integrations declared ⇒ zero integration boxes/arrows drawn.
+    const noIntChoices: BlueprintChoices = {
+      settings: { projectName: 'FlowApp', projectType: 'Web App', backend: 'Express', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' },
+      entities: [{ name: 'Ticket', fields: [{ name: 'title', type: 'String', required: true }] }],
+    };
+    const noIntSvg = renderFlowSvg(buildFlowMap(assembleBlueprint(noIntChoices)));
+    record(!/data-node-id="integration:/.test(noIntSvg) && !/data-kind="integration"/.test(noIntSvg),
+      'visual Map integration LITERAL BYPASS: no integrations declared → zero integration boxes/arrows drawn');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
