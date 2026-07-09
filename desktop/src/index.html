@@ -51,6 +51,12 @@
       .diagram { border: 1px solid #8883; border-radius: 8px; padding: 0.5rem; margin: 0 0 0.6rem; overflow: auto; background: #fff; }
       @media (prefers-color-scheme: dark) { .diagram { background: #f6f6f6; } }
       .diagram svg { max-width: 100%; height: auto; display: block; }
+      /* Eco-Day 66: the interactive impact highlight — the shell paints the engine's impacted-id set. */
+      .diagram .node.impact-change rect { fill: #fde68a; stroke: #d97706; stroke-width: 3; }
+      .diagram .node.impact-add rect    { fill: #bbf7d0; stroke: #16a34a; stroke-width: 3; }
+      .diagram .node.impact-delete rect { fill: #fecaca; stroke: #dc2626; stroke-width: 3; }
+      .diagram .edge.impact-add   { stroke: #16a34a; stroke-width: 3; }
+      .diagram .edge.impact-change{ stroke: #d97706; stroke-width: 3; }
       #status { font-size: 0.78rem; opacity: 0.7; margin: 0 0 0.5rem; }
       #output { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 0.78rem; padding: 0.7rem; border-radius: 8px; border: 1px solid #8883; min-height: 60%; }
       #output.clean    { border-color: #2e7d32; background: #2e7d3214; }

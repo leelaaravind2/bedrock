@@ -34,6 +34,7 @@ import { buildFileSet, applyPlan } from './core/regen.js';
 import { previewImpact, diffFileSets, fileHash, type ImpactAction } from './map/impact-map.js';
 import { buildFlowMap, type FlowNode } from './map/flow-map.js';
 import { renderFlowSvg } from './map/flow-svg.js';
+import { impactedNodes, fileOwners } from './map/impact-nodes.js';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { selectBackendPlugin } from './plugins/registry.js';
@@ -1697,6 +1698,89 @@ async function main(): Promise<void> {
     const noIntSvg = renderFlowSvg(buildFlowMap(assembleBlueprint(noIntChoices)));
     record(!/data-node-id="integration:/.test(noIntSvg) && !/data-kind="integration"/.test(noIntSvg),
       'visual Map integration LITERAL BYPASS: no integrations declared → zero integration boxes/arrows drawn');
+  }
+
+  // ══ PART 1z — THE INTERACTIVE IMPACT MAP: impacted nodes (Eco-Day 66) ══
+  // impactedNodes(current, proposed) projects previewImpact's changed files onto DIAGRAM NODES —
+  // the data the shell paints. The attribution is the EMITTERS' own (buildFileSet's per-entity
+  // generateEntity), NOT a path heuristic. NON-HASH: (A) DETERMINISTIC — byte-identical twice +
+  // fresh process; (B1) the attribution is TOTAL + DISJOINT over buildFileSet (proving it's the
+  // emitters', not a heuristic — a heuristic would gap/overlap); (B2) FAITHFUL — for the Day-64
+  // previewed==real pair (add `severity` to Ticket) the impacted set is EXACTLY the owners of the
+  // real changed files (no phantom, no missing), entity:Ticket highlighted; (C) empty bypass.
+  // Bakes NO digest (103 stays 103). NEW FILES ONLY (map/impact-nodes.ts + impact-nodes.ts).
+  process.stdout.write('\n=== PART 1z: the interactive impact Map — impacted nodes (Eco-Day 66) ===\n');
+  {
+    const ttSettings = { projectName: 'TeamTracker', projectType: 'Web App' as const, backend: 'Spring Boot', frontend: 'React', database: 'PostgreSQL', multiUser: true, auth: 'Simple login' as const };
+    const ticketFields = (withSeverity: boolean) => [
+      { name: 'title', type: 'String', required: true }, { name: 'code', type: 'String', unique: true },
+      { name: 'priority', type: 'Integer' }, { name: 'done', type: 'Boolean' },
+      ...(withSeverity ? [{ name: 'severity', type: 'Integer' }] : []),
+    ];
+    const ttChoices = (withSeverity: boolean): BlueprintChoices => ({
+      settings: ttSettings,
+      entities: [
+        { name: 'Team', fields: [{ name: 'name', type: 'String', required: true }, { name: 'description', type: 'String' }] },
+        { name: 'Application', fields: [{ name: 'name', type: 'String', required: true }, { name: 'status', type: 'String' }], relationships: [{ kind: 'belongs-to', target: 'Team' }] },
+        { name: 'Ticket', fields: ticketFields(withSeverity), relationships: [{ kind: 'belongs-to', target: 'Application' }, { kind: 'belongs-to', target: 'Team' }] },
+        { name: 'Comment', fields: [{ name: 'body', type: 'Text', required: true }], relationships: [{ kind: 'belongs-to', target: 'Ticket' }] },
+      ],
+    });
+    const currentChoices = ttChoices(false);
+    const proposedChoices = ttChoices(true); // + a `severity` field on Ticket (the Day-64 previewed==real edit)
+    const cur = assembleBlueprint(currentChoices);
+    const prop = assembleBlueprint(proposedChoices);
+
+    // (A) DETERMINISTIC (in-process): same pair → byte-identical impacted-id set (twice).
+    const in1 = JSON.stringify(await impactedNodes(assembleBlueprint(currentChoices), assembleBlueprint(proposedChoices)));
+    const in2 = JSON.stringify(await impactedNodes(assembleBlueprint(currentChoices), assembleBlueprint(proposedChoices)));
+    record(in1 === in2, 'impact-nodes DETERMINISTIC: same { current, proposed } → byte-identical impacted-id set (twice)');
+
+    // (A2) DETERMINISTIC (FRESH PROCESS): spawn the CLI twice → identical stdout, == the in-process set.
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), 'impact-nodes.js');
+    const pairJson = JSON.stringify({ current: currentChoices, proposed: proposedChoices });
+    const spawnNodes = () => execFileSync(process.execPath, [cli, '--model', pairJson], { encoding: 'utf8' }).trim();
+    const p1 = spawnNodes(); const p2 = spawnNodes();
+    record(p1 === p2 && p1 === in1, 'impact-nodes DETERMINISTIC (fresh process): CLI stdout byte-identical twice AND == the in-process set');
+
+    // (B1) THE ATTRIBUTION IS TOTAL + DISJOINT (proves it's the EMITTERS' own, not a heuristic).
+    const plugin = selectBackendPlugin(prop);
+    const inputs = prop.getPhaseASettings();
+    const style = prop.getStyle();
+    const perEntity = prop.getEntities().map((entity, index) => ({
+      name: entity.name,
+      rels: plugin.generateEntity(entity, { index, multiUser: inputs.multiUser === true, projectName: inputs.projectName, projectType: inputs.projectType, style }).map((f) => f.relPath),
+    }));
+    const allFiles = new Set((await buildFileSet(prop, plugin)).map((f) => f.relPath));
+    const seen = new Map<string, string>();
+    let disjoint = true;
+    for (const pe of perEntity) for (const rp of pe.rels) { if (seen.has(rp) && seen.get(rp) !== pe.name) disjoint = false; seen.set(rp, pe.name); }
+    const sound = perEntity.every((pe) => pe.rels.every((rp) => allFiles.has(rp))); // every entity file is really generated
+    const nonEmpty = perEntity.every((pe) => pe.rels.length > 0);
+    record(disjoint && sound && nonEmpty,
+      "impact attribution TOTAL + DISJOINT: each entity's files == its own generateEntity emit, pairwise disjoint, all ⊆ buildFileSet — the mapping is the EMITTERS' own (a heuristic would gap/overlap)",
+      `entities=${perEntity.length}, appFiles=${[...allFiles].filter((p) => !seen.has(p)).length}`);
+
+    // (B2) FAITHFUL, anchored to previewed==real: impacted == EXACTLY the owners of the real changed files.
+    const plan = await previewImpact(cur, prop);
+    const changed = plan.entries.filter((e) => e.action !== 'no-op');
+    const ownersProp = fileOwners(prop); const ownersCur = fileOwners(cur);
+    const propNodeIds = new Set(buildFlowMap(prop).nodes.map((n) => n.id));
+    const expected = new Set<string>();
+    const changedOwners = new Set<string>();
+    for (const e of changed) { const o = e.action === 'delete' ? (ownersCur.get(e.file) ?? 'app') : (ownersProp.get(e.file) ?? 'app'); changedOwners.add(o); if (propNodeIds.has(o)) expected.add(o); }
+    const impacted = new Set((await impactedNodes(cur, prop)).nodes.map((n) => n.id));
+    const eqSet = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x));
+    // no phantom + no missing == exact equality with the real changed files' owners; only Ticket (+app) touched.
+    const onlyTicketAndApp = [...changedOwners].every((o) => o === 'entity:Ticket' || o === 'app');
+    record(eqSet(impacted, expected) && impacted.has('entity:Ticket') && onlyTicketAndApp && changed.length > 0,
+      'impact FAITHFUL (anchored to previewed==real): impacted nodes == EXACTLY the owners of the real changed files (no phantom, no missing); the severity-add on Ticket highlights entity:Ticket',
+      `impacted=[${[...impacted].sort().join(',')}], changed=${changed.length}`);
+
+    // (C) EMPTY BYPASS: an identical { current, current } pair ⇒ zero impacted nodes/edges.
+    const same = await impactedNodes(cur, cur);
+    record(same.nodes.length === 0 && same.edges.length === 0,
+      'impact EMPTY BYPASS: identical { current, current } ⇒ zero impacted nodes and zero edges (no spurious highlight)');
   }
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);

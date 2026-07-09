@@ -40,6 +40,7 @@ pub fn run() {
             commands::impact_preview,
             commands::flow_map,
             commands::flow_svg,
+            commands::impact_nodes,
             commands::detect_toolchains,
             // Eco-Day 63 — shell-side blueprint store (additive; separate from the invokers above).
             store_commands::save_blueprint,

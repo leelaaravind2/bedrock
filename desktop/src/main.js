@@ -282,8 +282,40 @@ async function previewImpactOfEdit() {
   const pair = { current: baselineChoices, proposed: buildBlueprintChoices(selections) };
   if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to preview impact.'); return; }
   setStatus('Previewing the impact of your edits…');
-  try { renderResult('impact_preview', await invoke('impact_preview', { model: JSON.stringify(pair) })); }
-  catch (err) { setStatus('impact_preview: environment error'); setOutput('env-error', 'impact_preview — environment problem (sidecar missing/broken)', String(err)); }
+  try {
+    // 1) the certified TEXT delta (Day 64) — stays visible; the highlight is a VIEW of the same truth.
+    const model = JSON.stringify(pair);
+    renderResult('impact_preview', await invoke('impact_preview', { model }));
+    // 2) the IMPACTED node/edge ids (Eco-Day 66) — the ENGINE computes them; JS only PAINTS.
+    const r = await invoke('impact_nodes', { model });
+    if (r.exit_code === 0 && r.stdout) paintImpact(JSON.parse(r.stdout));
+  } catch (err) { setStatus('impact_preview: environment error'); setOutput('env-error', 'impact_preview — environment problem (sidecar missing/broken)', String(err)); }
+}
+
+// Paint the certified impacted-id set onto the already-rendered diagram — a CLASS TOGGLE only.
+// JS does NOT compute what changed: it receives { nodes, edges } as DATA from the engine and adds
+// impact-add / impact-change / impact-delete classes to the matching [data-node-id]/[data-from|to].
+const IMPACT_CLASSES = ['impact-add', 'impact-change', 'impact-delete'];
+function clearImpactHighlight() {
+  const d = document.getElementById('diagram');
+  if (d) for (const el of d.querySelectorAll('.' + IMPACT_CLASSES.join(', .'))) el.classList.remove(...IMPACT_CLASSES);
+}
+// Find an SVG element by an exact attribute value (avoids CSS-selector escaping of ids like "entity:X").
+function findByAttrs(container, attrs) {
+  const [first] = Object.keys(attrs);
+  return [...container.querySelectorAll(`[${first}]`)].find((el) => Object.entries(attrs).every(([k, v]) => el.getAttribute(k) === v));
+}
+function paintImpact(impacted) {
+  const d = document.getElementById('diagram');
+  clearImpactHighlight();
+  if (!d || d.hidden || !d.querySelector('svg')) {
+    setStatus('Impact computed (text delta shown) — click "View diagram" to see it highlighted.');
+    return;
+  }
+  let painted = 0;
+  for (const n of impacted.nodes || []) { const el = findByAttrs(d, { 'data-node-id': n.id }); if (el) { el.classList.add('impact-' + n.action); painted++; } }
+  for (const e of impacted.edges || []) { const el = findByAttrs(d, { 'data-from': e.from, 'data-to': e.to }); if (el) { el.classList.add('impact-' + e.action); painted++; } }
+  setStatus(`Impact highlighted on the diagram: ${painted} node(s)/edge(s) touched — exactly what the change generates.`);
 }
 
 function captureCurrentStep() {

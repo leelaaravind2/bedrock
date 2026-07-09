@@ -158,6 +158,21 @@ pub async fn flow_svg(
     run_sidecar(&app, "flow-svg.js", args).await
 }
 
+/// Compute the IMPACTED diagram nodes/edges for a change (Eco-Day 66). → `dist/impact-nodes.js`.
+/// `model` is a `{ current, proposed }` BlueprintChoices pair (like `impact_preview`); returns the
+/// impacted node/edge ids as JSON for the shell to PAINT onto the certified diagram (JS only paints).
+#[tauri::command]
+pub async fn impact_nodes(
+    app: AppHandle,
+    backend: Option<String>,
+    model: Option<String>,
+) -> Result<SidecarResult, String> {
+    let mut args = vec![];
+    push_opt(&mut args, "--backend", backend);
+    push_opt(&mut args, "--model", model);
+    run_sidecar(&app, "impact-nodes.js", args).await
+}
+
 /// Detect the toolchains THIS machine has for each backend. → `dist/detect-demo.js`.
 /// A SHELL-OUT to the certified `detect/probe.ts` — NOT a Rust re-probe (the thin-invoker
 /// thesis supersedes the Phase-1 "Rust probes" intent; a reimplementation would risk drift).
