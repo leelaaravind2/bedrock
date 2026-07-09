@@ -4,8 +4,9 @@
 **Microsoft signs at certification** (NO cert / EV / token / notarization). **Windows-only.**
 
 This is the authoritative **go-live runbook**: the four ordered steps that take the certified,
-release-ready system (Eco-Day 58) to the Store. **These steps run on Leela's Windows machine + Partner
-Center — NOT the dev shell.** This document is the **recipe**; none of the four steps is claimed done.
+release-ready **end-user system** (engine + wizard + store + the Map + Verify + export; certified
+Eco-Day 69) to the Store. **These steps run on Leela's Windows machine + Partner Center — NOT the dev
+shell.** This document is the **recipe**; none of the four steps is claimed done.
 
 MSIX is **not** a Tauri v2 bundle target (`tauri build` produces `msi`/`nsis`). The Store package is an
 **external wrap** of the Tauri build payload via the Windows SDK `MakeAppx.exe`.
@@ -37,7 +38,9 @@ Step 3 (name reservation) is what **assigns** the `AppxManifest.xml` Identity va
 
 ## Step 1 — the MakeAppx MSIX wrap
 
-**Input:** the Day-55 built payload. **Tool:** Windows SDK `MakeAppx.exe` (+ `SignTool` for the local test).
+**Input:** the fresh **Eco-Day-69 built payload** (the current shell — wizard + the Map + Verify + export
+— with the certified sidecar, sync-gen stamp `83ffd0ad…`/245, now carrying the `flow-svg` +
+`impact-nodes` entries). **Tool:** Windows SDK `MakeAppx.exe` (+ `SignTool` for the local test).
 
 ```powershell
 # 1a. Build the Tauri payload (beforeBuildCommand re-syncs resources/gen to the certified generator).
@@ -73,25 +76,42 @@ certified **before** wrapping.
 
 ---
 
-## Step 2 — the packaged launch + sidecar-under-MSIX test
+## Step 2 — the packaged launch + the live-GUI walkthrough (Eco-Day-69 Half B)
 
 Sideload the **local-test** `.msix` and verify the app works end-to-end packaged (not just `tauri dev`).
+**This is where the Eco-Day-69 Half-B live-GUI checklist gets run** (it is PENDING until then — no live
+GUI run is claimed in-repo).
 
 ```powershell
 Add-AppxPackage .\Bedrock.msix       # sideload (dev cert must be trusted)
 # Launch Bedrock from the Start menu.
 ```
 
-**Verify:**
-- The **front-end loads** (the Bedrock window, the 5 command panels).
-- The **5 commands round-trip** — the sidecar spawns under MSIX's `runFullTrust`, and the `SidecarResult`
-  renders across its branches: **clean (exit 0)** / **scan findings (exit 1, results not an error)** /
-  **env-error (rejected promise)**.
-- **Packaged determinism smoke** — the export / scan / Map surfaces work through the GUI; the packaged
-  sidecar generates identically to the certified generator (the Eco-Day 58 DC-2 property, now GUI-observed).
+**The 8-item live-GUI walkthrough** (full detail + per-item PASS criteria in
+[`../../../docs/daily/eco-day-69-report.md`](../../../docs/daily/eco-day-69-report.md) §3). Each PASS/FAIL
+is recorded; any FAIL is a FINDING that blocks the submission until investigated:
 
-**Done-check:** the packaged app **works end-to-end** — the sidecar spawns and generates under the MSIX
-container.
+1. **Launch** — the Bedrock window opens.
+2. **Wizard → Generate** — walk the wizard (or load the TeamTracker preset) → Export to a folder → a real
+   project tree on disk + the engine's success stdout + the standalone-export note.
+3. **Save + List + Load** — the SQLite file materializes at
+   `%APPDATA%/com.thraksha.bedrock/bedrock-blueprints.sqlite`; the loaded blueprint matches.
+4. **View diagram** — the certified SVG renders (the user's own entities).
+5. **Preview impact** — the text delta renders **and** the diagram highlights exactly the impacted nodes.
+6. **Compare versions** — B's diagram painted with the delta; a deleted entity appears in the text delta
+   with **no ghost node**.
+7. **Verify determinism** — **"Verified — byte-identical"** (a real double-generation through the packaged
+   sidecar). A non-empty result is a genuine determinism FINDING — **report it, do not hide it**.
+8. **Friendly errors** — a bad `--model` value fires the validation hint with **no invoke**; a forced
+   engine error shows a human header + the raw stack under "Technical details".
+
+Underlying contract: the sidecar spawns under MSIX's `runFullTrust`; the `SidecarResult` renders across
+its branches (**clean (exit 0)** / **scan findings (exit 1, data not an error)** / **env-error (rejected
+promise)**); the packaged sidecar generates identically to the certified generator (the Eco-Day 69 DC-2
+property, now GUI-observed).
+
+**Done-check:** the packaged app **works end-to-end** — all 8 items PASS; the sidecar spawns and
+generates under the MSIX container.
 
 ---
 
