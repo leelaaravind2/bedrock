@@ -63,6 +63,14 @@
       #output.findings { border-color: #b8860b; background: #b8860b1c; }
       #output.info     { border-color: #6674; background: #66666614; }
       #output.env-error{ border-color: #c62828; background: #c6282814; }
+      /* Eco-Day 68: friendly ≠ hiding — the raw engine output stays reachable, collapsed by default. */
+      details#output-details { margin: 0.5rem 0 0; }
+      details#output-details summary { cursor: pointer; font-size: 0.76rem; opacity: 0.7; padding: 0.25rem 0; }
+      details#output-details pre { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 0.74rem; background: #8881; border-radius: 6px; padding: 0.5rem; margin: 0.3rem 0 0; overflow-x: auto; }
+      /* Eco-Day 68: the standalone-export note — STATIC text (JS only toggles hidden; it asserts nothing). */
+      #export-note { margin: 0.6rem 0 0; padding: 0.6rem 0.7rem; font-size: 0.78rem; line-height: 1.45; border: 1px solid #2e7d32; border-radius: 8px; background: #2e7d320f; }
+      #export-note strong { font-weight: 650; }
+      #export-note code { font-family: ui-monospace, monospace; font-size: 0.74rem; background: #8882; padding: 0.05rem 0.25rem; border-radius: 4px; }
     </style>
   </head>
   <body>
@@ -97,7 +105,9 @@
             <button id="view-diagram">View diagram</button>
             <button id="view-flow-map">Flow map (text)</button>
             <button id="preview-impact">Preview impact of edits</button>
+            <button id="verify-determinism">Verify determinism</button>
           </div>
+          <p class="hint">Verify generates your project <em>twice, independently</em>, and compares every file — proof that the same blueprint produces byte-identical code (reproducibility, not correctness or security).</p>
         </div>
 
         <!-- My projects: the saved blueprints (SQLite store, Eco-Day 63) — load one back. -->
@@ -168,6 +178,21 @@
         <p id="status">Fill the wizard (or pick a template), then Generate. A rejected call = an environment problem; a completed run (any exit code) = data.</p>
         <div id="diagram" class="diagram" hidden><!-- the certified flow-svg is inserted here (thin display) --></div>
         <pre id="output" class="info">No project generated yet.</pre>
+        <!-- Eco-Day 68: the RAW engine output — always reachable, never the primary UI (friendly ≠ hiding). -->
+        <details id="output-details" hidden>
+          <summary>Technical details (raw engine output)</summary>
+          <pre id="output-raw"></pre>
+        </details>
+        <!-- Eco-Day 68: the standalone-export note — STATIC, always-true text at Law-21's PROVEN level.
+             JS only toggles `hidden`; it computes/asserts NOTHING about a particular export. -->
+        <div id="export-note" hidden>
+          <strong>Standalone project — you own this.</strong>
+          It has <strong>no functional dependency on Bedrock</strong>: 0 dependency-manifest entries and
+          0 functional imports (statically verified + require-graph checked in CI, PART&nbsp;1t). Inert
+          provenance comments (ownership markers) remain in the source and don't affect build or run. Run it
+          with Bedrock deleted using the <code>docker compose up --build</code> command shown above.
+          (The live container boot is not run here.)
+        </div>
       </section>
     </main>
 

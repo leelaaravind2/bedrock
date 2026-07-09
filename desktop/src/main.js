@@ -21,12 +21,38 @@ function tauriInvoke() {
   if (t && t.core && typeof t.core.invoke === 'function') return t.core.invoke;
   return null;
 }
-function setOutput(kind, title, body) {
+// setOutput(kind, title, body, rawDetail?) — the human message goes in #output; the RAW engine
+// text (a stack, stderr, the full stdout) goes into an expandable <details> that is ALWAYS
+// reachable when it exists (friendly ≠ hiding — never swallowed, never the primary UI). The
+// standalone-export note is shown ONLY by the export path, so hide it on every other output.
+function setOutput(kind, title, body, rawDetail) {
   const out = document.getElementById('output');
   out.className = kind;
   out.textContent = `[${title}]\n\n${body && body.length ? body : '(no output)'}`;
+  const details = document.getElementById('output-details');
+  const rawPre = document.getElementById('output-raw');
+  if (details && rawPre) {
+    if (rawDetail != null && String(rawDetail).length) {
+      rawPre.textContent = String(rawDetail);
+      details.hidden = false;
+      details.open = false; // collapsed by default — reachable, not shouting
+    } else {
+      rawPre.textContent = '';
+      details.hidden = true;
+    }
+  }
+  const note = document.getElementById('export-note');
+  if (note) note.hidden = true;
 }
 function setStatus(text) { document.getElementById('status').textContent = text; }
+
+// A rejected invoke promise = an ENVIRONMENT failure ONLY (Day-53 SidecarResult contract): the
+// sidecar is missing or couldn't run. We say exactly that — no diagnosis of engine internals — and
+// keep the raw error String(err) in the expandable detail.
+function setEnvError(status, title, friendly, err) {
+  setStatus(status);
+  setOutput('env-error', title, friendly, err == null ? undefined : String(err));
+}
 
 // ─── tiny DOM helpers (programmatic — for the dynamic data-model editor) ───────────────────
 function h(tag, attrs = {}, ...kids) {
@@ -193,7 +219,7 @@ async function saveProject() {
     setBaseline(choices, `#${id} (saved)`); // the just-saved blueprint becomes the impact "current"
     refreshProjects();
     refreshCompareSelects(); // a newly-saved project becomes available to compare
-  } catch (err) { setStatus('save: storage error'); setOutput('env-error', 'save_blueprint — storage error', String(err)); }
+  } catch (err) { setEnvError('save: storage error', "Couldn't save your project", 'A local-store (SQLite) error occurred while saving. Your wizard input is intact. The technical detail is below.', err); }
 }
 async function refreshProjects() {
   const invoke = tauriInvoke();
@@ -217,7 +243,7 @@ async function loadProject(id) {
     setBaseline(choices, `#${id} (loaded)`); // the loaded blueprint is the impact "current"
     stepIndex = REVIEW_STEP; renderStep();
     setStatus(`Loaded "${selections.projectName}" (#${id}). Edit it, then Preview impact to see exactly what changes.`);
-  } catch (err) { setStatus('load: storage error'); setOutput('env-error', 'load_blueprint — storage error', String(err)); }
+  } catch (err) { setEnvError('load: storage error', "Couldn't load that project", 'A local-store (SQLite) error occurred while loading. The technical detail is below.', err); }
 }
 
 // ─── the linked project view (Eco-Day 64) — maps + impact on the user's OWN blueprint ──────
@@ -256,7 +282,7 @@ async function viewDiagram() {
       setStatus(`Diagram of ${selections.projectName} — drawn by the certified engine (same graph as the text flow map).`);
       setOutput('info', 'flow_svg — diagram shown above', 'The drawn diagram is the certified flow map (a projection of your declared model). The text map is available via "Flow map (text)".');
     } else { renderResult('flow_svg', r); }
-  } catch (err) { setStatus('flow_svg: environment error'); setOutput('env-error', 'flow_svg — environment problem (sidecar missing/broken)', String(err)); }
+  } catch (err) { setEnvError('flow_svg: environment error', "Couldn't draw the diagram", "Bedrock's generator couldn't run (an environment problem — the sidecar is missing or broke), not a problem with your project. The technical detail is below.", err); }
 }
 
 // View the flow map of the CURRENT wizard blueprint. The engine projects the declared model;
@@ -267,7 +293,7 @@ async function viewFlowMap() {
   if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to view the flow map.'); return; }
   setStatus('Building the flow map…');
   try { renderResult('flow_map', await invoke('flow_map', { model })); } // pass ONLY model (backend rides settings.backend)
-  catch (err) { setStatus('flow_map: environment error'); setOutput('env-error', 'flow_map — environment problem (sidecar missing/broken)', String(err)); }
+  catch (err) { setEnvError('flow_map: environment error', "Couldn't build the flow map", "Bedrock's generator couldn't run (an environment problem — the sidecar is missing or broke). The technical detail is below.", err); }
 }
 
 // Preview the impact of the user's EDIT: the engine diffs { current: baseline, proposed: edited }
@@ -290,7 +316,7 @@ async function previewImpactOfEdit() {
     // 2) the IMPACTED node/edge ids (Eco-Day 66) — the ENGINE computes them; JS only PAINTS.
     const r = await invoke('impact_nodes', { model });
     if (r.exit_code === 0 && r.stdout) paintImpact(JSON.parse(r.stdout));
-  } catch (err) { setStatus('impact_preview: environment error'); setOutput('env-error', 'impact_preview — environment problem (sidecar missing/broken)', String(err)); }
+  } catch (err) { setEnvError('impact_preview: environment error', "Couldn't preview the impact", "Bedrock's generator couldn't run (an environment problem — the sidecar is missing or broke). The technical detail is below.", err); }
 }
 
 // Paint the certified impacted-id set onto the already-rendered diagram — a CLASS TOGGLE only.
@@ -317,6 +343,48 @@ function paintImpact(impacted) {
   for (const n of impacted.nodes || []) { const el = findByAttrs(d, { 'data-node-id': n.id }); if (el) { el.classList.add('impact-' + n.action); painted++; } }
   for (const e of impacted.edges || []) { const el = findByAttrs(d, { 'data-from': e.from, 'data-to': e.to }); if (el) { el.classList.add('impact-' + e.action); painted++; } }
   setStatus(`Impact highlighted on the diagram: ${painted} node(s)/edge(s) touched — exactly what the change generates.`);
+}
+
+// ─── the visible determinism proof (Eco-Day 68) — "Verify" REALLY runs generation twice ─────
+// NOT a canned badge. We point the CERTIFIED pair surfaces at the CURRENT blueprint vs ITSELF:
+// previewImpact runs buildFileSet TWICE internally (once for current, once for proposed), so this
+// is a genuine DOUBLE-GENERATION + diff. An empty result ({nodes:[],edges:[]}) IS the byte-identity
+// proof (PART 1z-C's empty bypass, reused as a user-facing Verify). The JS check compares the
+// ENGINE's structured result to empty — it computes no diff of its own. A non-empty result (which
+// must never happen for a blueprint vs itself) is shown HONESTLY as an unexpected finding.
+async function verifyDeterminism() {
+  const invoke = tauriInvoke();
+  if (!invoke) {
+    setStatus('not running inside Bedrock');
+    setOutput('env-error', 'Verify — open inside Bedrock', 'Verify runs the generator twice and compares every file — open inside the Bedrock window to run it.');
+    return;
+  }
+  const model = JSON.stringify({ current: buildBlueprintChoices(selections), proposed: buildBlueprintChoices(selections) });
+  setStatus('Verifying — generating your project twice and comparing every file…');
+  try {
+    const r = await invoke('impact_nodes', { model }); // the engine double-generates + diffs
+    if (r.exit_code !== 0) { renderResult('impact_nodes', r); return; } // a real run that reported — surface it
+    const impacted = JSON.parse(r.stdout);
+    const nNodes = (impacted.nodes || []).length;
+    const nEdges = (impacted.edges || []).length;
+    const pr = await invoke('impact_preview', { model }); // the human "0 add, 0 change… N unchanged" text
+    const detail = (pr.exit_code === 0 && pr.stdout && pr.stdout.length) ? pr.stdout : r.stdout;
+    if (nNodes === 0 && nEdges === 0) {
+      setStatus('Verified — 0 differences across two independent generations.');
+      setOutput('clean', 'Verified — byte-identical',
+        'Bedrock generated your project twice, independently, and compared every file: 0 differences. '
+        + 'The same blueprint always produces byte-identical code. This proves reproducibility — generation '
+        + 'is a pure function of your blueprint — not correctness or security.',
+        detail);
+    } else {
+      // Must be impossible for a deterministic engine on a blueprint vs itself — never hide it.
+      setStatus(`Verify — UNEXPECTED: ${nNodes} node(s)/${nEdges} edge(s) differ`);
+      setOutput('findings', 'Verify — UNEXPECTED difference (please report)',
+        `Two generations of the SAME blueprint differed (${nNodes} node(s), ${nEdges} edge(s)). That should be `
+        + 'impossible for a deterministic engine — this is a real finding, not a display glitch.',
+        detail);
+    }
+  } catch (err) { setEnvError('verify: environment error', "Verify couldn't run the generator", 'This is an environment problem (the sidecar is missing or broke), not a problem with your project. The technical detail is below.', err); }
 }
 
 // ─── the diff Map (Eco-Day 67) — compare TWO SAVED blueprints ───────────────────────────────
@@ -366,7 +434,7 @@ async function compareVersions() {
     const nodesR = await invoke('impact_nodes', { model });
     if (nodesR.exit_code === 0 && nodesR.stdout) paintImpact(JSON.parse(nodesR.stdout));
     if (warn) setStatus(document.getElementById('status').textContent + warn);
-  } catch (err) { setStatus('compare: environment error'); setOutput('env-error', 'compare — environment problem (sidecar missing/broken)', String(err)); }
+  } catch (err) { setEnvError('compare: environment error', "Couldn't compare those versions", "Bedrock's generator couldn't run (an environment problem — the sidecar is missing or broke). The technical detail is below.", err); }
 }
 
 function captureCurrentStep() {
@@ -394,8 +462,8 @@ async function generate() {
     const r = await invoke('export_project', { targetDir, model: JSON.stringify(choices) });
     renderResult('export_project', r);
   } catch (err) {
-    setStatus('export: environment error');
-    setOutput('env-error', 'export_project — environment problem (sidecar missing/broken)', String(err));
+    setEnvError('export: environment error', "Bedrock's generator couldn't start",
+      'This is an environment problem (the sidecar is missing or couldn\'t run), not a problem with your project. The technical detail is below.', err);
   }
 }
 function wizardNext() { captureCurrentStep(); if (stepIndex >= REVIEW_STEP) { generate(); return; } stepIndex += 1; renderStep(); }
@@ -403,6 +471,14 @@ function wizardBack() { captureCurrentStep(); if (stepIndex > 0) stepIndex -= 1;
 
 // ─── the Advanced harness (raw commands — unchanged) ────────────────────────────────────────
 function optValue(id) { const el = id && document.getElementById(id); const v = el ? el.value.trim() : ''; return v === '' ? undefined : v; }
+// PRE-INVOKE VALIDATION (prevents the ENOENT rather than prettifying it): a non-empty raw --model
+// box must be valid JSON OR a plausible file path. This is GUIDANCE, not a diagnosis of internals.
+function looksLikePath(s) { return /\.json$/i.test(s) || /[\\/]/.test(s); }
+function validModelArg(s) {
+  if (s == null) return true;               // omitted ⇒ the demo bypass (fine)
+  try { JSON.parse(s); return true; } catch (_e) { /* not JSON — try a path */ }
+  return looksLikePath(s);
+}
 function buildArgs(btn) {
   const args = {};
   if (btn.dataset.targetdir) args.targetDir = optValue(btn.dataset.targetdir);
@@ -412,12 +488,39 @@ function buildArgs(btn) {
   for (const k of Object.keys(args)) if (args[k] === undefined) delete args[k];
   return args;
 }
+// Humanize the Day-53 SidecarResult (a RESOLVED run = DATA, never a crash). Each branch gets a
+// human header; the engine's OWN message is shown, never discarded, never re-worded into a claim
+// it didn't make, never diagnosed by a heuristic. The raw stdout+stderr stays in the detail.
 function renderResult(cmd, r) {
   const code = r.exit_code;
-  setStatus(`${cmd}: completed (exit ${code})`);
-  if (code === 0) setOutput('clean', `${cmd} — OK (exit 0)`, r.stdout);
-  else if (code === 1 && cmd === 'scan_project') setOutput('findings', `${cmd} — CERTAIN findings (exit 1) · review required`, r.stdout && r.stdout.length ? r.stdout : r.stderr);
-  else setOutput('info', `${cmd} — completed (exit ${code})`, [r.stdout, r.stderr].filter((s) => s && s.length).join('\n---\n'));
+  const raw = [r.stdout, r.stderr].filter((s) => s && s.length).join('\n---\n');
+  if (code === 0) {
+    setStatus(`${cmd}: done`);
+    setOutput('clean', `${cmd} — done`, r.stdout && r.stdout.length ? r.stdout : '(completed with no output)');
+    // The standalone-export experience (DC-3): surface the ENGINE's own stdout (file count + the
+    // "0 functional Thraksha references" line + the container command, already in r.stdout above),
+    // then reveal the STATIC Law-21 note. JS asserts nothing about this particular export.
+    if (cmd === 'export_project') { const n = document.getElementById('export-note'); if (n) n.hidden = false; }
+    return;
+  }
+  if (code === 1 && cmd === 'scan_project') {
+    // Data, not an error: the scan ran and found CERTAIN findings (Day 45's deterministic scan).
+    setStatus(`${cmd}: CERTAIN findings — review required`);
+    setOutput('findings', `${cmd} — CERTAIN findings · review required`, r.stdout && r.stdout.length ? r.stdout : r.stderr);
+    return;
+  }
+  if (code === 2) {
+    // The engine's usage/exit-2 = a missing input; show its OWN usage line (stderr), no invention.
+    setStatus(`${cmd}: an input is needed`);
+    setOutput('info', 'Bedrock needs an input', (r.stderr && r.stderr.length ? r.stderr : r.stdout) || 'A required input is missing.', raw);
+    return;
+  }
+  // Any other non-zero: the generator RAN and reported a problem (e.g. the ENOENT of a bad --model
+  // path). We say exactly that + show its OWN message — no guessed diagnosis of what went wrong.
+  setStatus(`${cmd}: the generator reported a problem (exit ${code})`);
+  setOutput('info', "Bedrock's generator ran and reported a problem",
+    "The generator started fine but reported a problem while running. Its exact message is below — nothing is hidden or reworded.",
+    raw || `(exit ${code}, no output)`);
 }
 async function runCommand(btn) {
   const cmd = btn.dataset.cmd;
@@ -426,9 +529,15 @@ async function runCommand(btn) {
   const args = buildArgs(btn);
   if (cmd === 'export_project' && !args.targetDir) { setStatus('export: missing target directory'); setOutput('info', 'export — input needed', 'Enter a target directory.'); return; }
   if (cmd === 'scan_project' && !args.projectDir) { setStatus('scan: missing project directory'); setOutput('info', 'scan — input needed', 'Enter a project directory.'); return; }
+  if ('model' in args && !validModelArg(args.model)) {
+    setStatus(`${cmd}: check the model input`);
+    setOutput('info', 'Model input must be JSON or a file path',
+      'The model box must be a BlueprintChoices JSON object or a path to a .json file. Enter valid JSON or a file path, or leave it blank to use the built-in demo model.');
+    return; // do NOT invoke — this is exactly what produced the raw-ENOENT stack.
+  }
   setStatus(`running ${cmd}…`);
   try { renderResult(cmd, await invoke(cmd, args)); }
-  catch (err) { setStatus(`${cmd}: environment error`); setOutput('env-error', `${cmd} — environment problem (sidecar missing/broken)`, String(err)); }
+  catch (err) { setEnvError(`${cmd}: environment error`, "Bedrock's generator couldn't start", 'An environment problem (the sidecar is missing or broke), not a problem with your input. The technical detail is below.', err); }
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
@@ -446,6 +555,7 @@ function init() {
   document.getElementById('view-diagram').addEventListener('click', viewDiagram);
   document.getElementById('view-flow-map').addEventListener('click', viewFlowMap);
   document.getElementById('preview-impact').addEventListener('click', previewImpactOfEdit);
+  document.getElementById('verify-determinism').addEventListener('click', verifyDeterminism);
   renderProjectView();
   document.getElementById('projects-refresh').addEventListener('click', refreshProjects);
   refreshProjects();
