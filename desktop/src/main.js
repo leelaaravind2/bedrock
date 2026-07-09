@@ -190,6 +190,7 @@ async function saveProject() {
     const id = await invoke('save_blueprint', { name: selections.projectName, modelJson: JSON.stringify(choices) });
     setStatus(`Saved "${selections.projectName}" as #${id}.`);
     setOutput('clean', 'Saved', `Project "${selections.projectName}" persisted to your local store (id #${id}).`);
+    setBaseline(choices, `#${id} (saved)`); // the just-saved blueprint becomes the impact "current"
     refreshProjects();
   } catch (err) { setStatus('save: storage error'); setOutput('env-error', 'save_blueprint — storage error', String(err)); }
 }
@@ -210,10 +211,58 @@ async function loadProject(id) {
   if (!invoke) return;
   try {
     const json = await invoke('load_blueprint', { id });
-    Object.assign(selections, choicesToSelections(JSON.parse(json)));
+    const choices = JSON.parse(json);
+    Object.assign(selections, choicesToSelections(choices));
+    setBaseline(choices, `#${id} (loaded)`); // the loaded blueprint is the impact "current"
     stepIndex = REVIEW_STEP; renderStep();
-    setStatus(`Loaded "${selections.projectName}" (#${id}). Review or edit, then Generate / Save.`);
+    setStatus(`Loaded "${selections.projectName}" (#${id}). Edit it, then Preview impact to see exactly what changes.`);
   } catch (err) { setStatus('load: storage error'); setOutput('env-error', 'load_blueprint — storage error', String(err)); }
+}
+
+// ─── the linked project view (Eco-Day 64) — maps + impact on the user's OWN blueprint ──────
+// baselineChoices = the last SAVED or LOADED blueprint (the impact "current"); NEVER fabricated.
+let baselineChoices = null;
+let baselineLabel = '';
+
+function setBaseline(choices, label) {
+  baselineChoices = JSON.parse(JSON.stringify(choices)); // a snapshot, immune to later wizard edits
+  baselineLabel = label;
+  renderProjectView();
+}
+function renderProjectView() {
+  const el = document.getElementById('baseline-label');
+  if (!el) return;
+  el.textContent = baselineChoices
+    ? `Impact compares your edits against baseline ${baselineLabel}. Change the data model, then Preview impact.`
+    : 'No saved baseline yet — Save or load a project, then your edits can be previewed against it.';
+}
+
+// View the flow map of the CURRENT wizard blueprint. The engine projects the declared model;
+// JS renders its stdout VERBATIM (a projection, never parsed from code — Day 50).
+async function viewFlowMap() {
+  const invoke = tauriInvoke();
+  const model = JSON.stringify(buildBlueprintChoices(selections));
+  if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to view the flow map.'); return; }
+  setStatus('Building the flow map…');
+  try { renderResult('flow_map', await invoke('flow_map', { model })); } // pass ONLY model (backend rides settings.backend)
+  catch (err) { setStatus('flow_map: environment error'); setOutput('env-error', 'flow_map — environment problem (sidecar missing/broken)', String(err)); }
+}
+
+// Preview the impact of the user's EDIT: the engine diffs { current: baseline, proposed: edited }
+// and returns the exact file delta. JS builds the PAIR (pure data — two BlueprintChoices, NO diff)
+// and renders the engine's stdout VERBATIM (a JS-computed diff would break previewed==real).
+async function previewImpactOfEdit() {
+  const invoke = tauriInvoke();
+  if (!baselineChoices) {
+    setStatus('preview impact: no baseline');
+    setOutput('info', 'Preview impact — needs a baseline', 'Save or load a project first, then edit it. Preview impact will show exactly which files your change affects, before generating.');
+    return;
+  }
+  const pair = { current: baselineChoices, proposed: buildBlueprintChoices(selections) };
+  if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to preview impact.'); return; }
+  setStatus('Previewing the impact of your edits…');
+  try { renderResult('impact_preview', await invoke('impact_preview', { model: JSON.stringify(pair) })); }
+  catch (err) { setStatus('impact_preview: environment error'); setOutput('env-error', 'impact_preview — environment problem (sidecar missing/broken)', String(err)); }
 }
 
 function captureCurrentStep() {
@@ -290,6 +339,9 @@ function init() {
   document.getElementById('wizard-next').addEventListener('click', wizardNext);
   document.getElementById('wizard-back').addEventListener('click', wizardBack);
   renderStep();
+  document.getElementById('view-flow-map').addEventListener('click', viewFlowMap);
+  document.getElementById('preview-impact').addEventListener('click', previewImpactOfEdit);
+  renderProjectView();
   document.getElementById('projects-refresh').addEventListener('click', refreshProjects);
   refreshProjects();
   for (const btn of document.querySelectorAll('button[data-cmd]')) btn.addEventListener('click', () => runCommand(btn));
