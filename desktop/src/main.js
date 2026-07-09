@@ -192,6 +192,7 @@ async function saveProject() {
     setOutput('clean', 'Saved', `Project "${selections.projectName}" persisted to your local store (id #${id}).`);
     setBaseline(choices, `#${id} (saved)`); // the just-saved blueprint becomes the impact "current"
     refreshProjects();
+    refreshCompareSelects(); // a newly-saved project becomes available to compare
   } catch (err) { setStatus('save: storage error'); setOutput('env-error', 'save_blueprint — storage error', String(err)); }
 }
 async function refreshProjects() {
@@ -318,6 +319,56 @@ function paintImpact(impacted) {
   setStatus(`Impact highlighted on the diagram: ${painted} node(s)/edge(s) touched — exactly what the change generates.`);
 }
 
+// ─── the diff Map (Eco-Day 67) — compare TWO SAVED blueprints ───────────────────────────────
+// A pure thin client: it points the ALREADY-PROVEN pair surfaces (impact_preview + impact_nodes,
+// PART 1w/1z) + flow_svg at two blueprints LOADED from the store (the Day-63 round-trip is lossless,
+// so A/B are the REAL saved versions). The ENGINE computes the delta; JS ONLY PAINTS. No JS diff.
+async function refreshCompareSelects() {
+  const invoke = tauriInvoke();
+  const selA = document.getElementById('compare-a');
+  const selB = document.getElementById('compare-b');
+  if (!selA || !selB) return;
+  if (!invoke) { selA.innerHTML = selB.innerHTML = '<option value="">(open inside Bedrock)</option>'; return; }
+  try {
+    const rows = await invoke('list_blueprints');
+    const opts = rows.length
+      ? rows.map((r) => `<option value="${r.id}">${escapeHtml(r.name)} · #${r.id} · ${escapeHtml(r.created_at)}</option>`).join('')
+      : '<option value="">(no saved projects yet)</option>';
+    selA.innerHTML = opts; selB.innerHTML = opts;
+    if (rows.length > 1) selB.selectedIndex = 1; // default B ≠ A when possible
+  } catch (err) { selA.innerHTML = selB.innerHTML = `<option value="">list error</option>`; }
+}
+
+async function compareVersions() {
+  const invoke = tauriInvoke();
+  if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to compare saved versions.'); return; }
+  const idA = document.getElementById('compare-a').value;
+  const idB = document.getElementById('compare-b').value;
+  if (!idA || !idB) { setStatus('compare: pick two saved projects'); setOutput('info', 'Compare — pick A and B', 'Save at least two projects, then pick A (from) and B (to).'); return; }
+  setStatus(`Comparing #${idA} → #${idB}…`);
+  try {
+    // A and B are REAL loaded blueprints (the Day-63 round-trip is lossless — loaded == saved).
+    const aJson = await invoke('load_blueprint', { id: Number(idA) });
+    const bJson = await invoke('load_blueprint', { id: Number(idB) });
+    const A = JSON.parse(aJson); const B = JSON.parse(bJson);
+    // ALLOW + WARN a stack/type mismatch (the engine answers ANY pair truthfully — reading two
+    // settings values is a UI guard, NOT a diff computation; the shell never overrides the engine).
+    const mismatch = A.settings && B.settings && (A.settings.backend !== B.settings.backend || A.settings.projectType !== B.settings.projectType);
+    const warn = mismatch ? ' (A and B use different backend/project type — the delta will be large.)' : '';
+    const model = JSON.stringify({ current: A, proposed: B });
+    // 1) the certified TEXT delta (the engine computes it — verbatim).
+    renderResult('impact_preview', await invoke('impact_preview', { model }));
+    // 2) B's certified diagram (B = the target; the change INTO B is what we highlight — like Day 66's proposed).
+    const svgR = await invoke('flow_svg', { model: bJson });
+    const diagram = document.getElementById('diagram');
+    if (svgR.exit_code === 0 && svgR.stdout) { diagram.innerHTML = svgR.stdout; diagram.hidden = false; }
+    // 3) the impacted ids (the engine computes them) → PAINT B's diagram (JS only paints).
+    const nodesR = await invoke('impact_nodes', { model });
+    if (nodesR.exit_code === 0 && nodesR.stdout) paintImpact(JSON.parse(nodesR.stdout));
+    if (warn) setStatus(document.getElementById('status').textContent + warn);
+  } catch (err) { setStatus('compare: environment error'); setOutput('env-error', 'compare — environment problem (sidecar missing/broken)', String(err)); }
+}
+
 function captureCurrentStep() {
   if (stepIndex >= STEPS.length) return; // data-model + review write to the model live
   const el = document.querySelector('#wizard-body input, #wizard-body select');
@@ -398,6 +449,9 @@ function init() {
   renderProjectView();
   document.getElementById('projects-refresh').addEventListener('click', refreshProjects);
   refreshProjects();
+  document.getElementById('compare-run').addEventListener('click', compareVersions);
+  document.getElementById('compare-refresh').addEventListener('click', refreshCompareSelects);
+  refreshCompareSelects();
   for (const btn of document.querySelectorAll('button[data-cmd]')) btn.addEventListener('click', () => runCommand(btn));
   if (!tauriInvoke()) setStatus('note: Tauri backend not detected (open inside Bedrock to generate). The wizard + the assembled BlueprintChoices still work.');
 }

@@ -107,6 +107,20 @@
           <button class="ghost" id="projects-refresh">Refresh</button>
         </div>
 
+        <!-- Compare versions (Eco-Day 67): the diff Map — pick two SAVED blueprints, see the exact delta. -->
+        <div class="card">
+          <h2>Compare versions</h2>
+          <label>A (from)</label>
+          <select id="compare-a"></select>
+          <label>B (to)</label>
+          <select id="compare-b"></select>
+          <div class="row-inline">
+            <button id="compare-run">Compare A → B</button>
+            <button class="ghost" id="compare-refresh">Refresh</button>
+          </div>
+          <p class="hint">B's diagram is drawn; the change from A into B is highlighted. Deleted entities (removed in B) appear in the text delta below, not the diagram — B has no node for a removed entity.</p>
+        </div>
+
         <!-- Advanced: the raw command harness (scan / flow-map / impact / detect + raw --model). -->
         <details class="advanced">
           <summary>Advanced — raw commands</summary>
