@@ -96,14 +96,16 @@ export const TEMPLATES = [
   { key: 'worker',  label: 'Worker',   sel: { projectName: 'MyWorker',  projectType: 'Cron Worker', backend: 'Express', frontend: 'None',  database: 'PostgreSQL', multiUser: true, auth: 'Simple login' } },
 ];
 
-// The ordered wizard steps (settings-only, Day 61). Each maps a select/text field of `sel`.
+// The ordered wizard steps. Eco-Day 73: Backend/Frontend/Database/Auth are collected on ONE
+// "Stack" screen (four fields) instead of four separate steps — projectName + projectType stay
+// their own steps. The serializer does NOT read STEPS (buildBlueprintChoices reads `sel` keys
+// directly), so this regroup is byte-neutral; the Stack screen's four fields still write
+// selections.{backend,frontend,database,auth} via the pure, unit-tested mapping in stack-fields.js.
+// The FRONTENDLESS type↔frontend nicety stays in buildBlueprintChoices (the engine's source of truth).
 export const STEPS = [
   { id: 'projectName', label: 'App name',     kind: 'text' },
   { id: 'projectType', label: 'Project type', kind: 'select', options: PROJECT_TYPES },
-  { id: 'backend',     label: 'Backend',      kind: 'select', options: BACKENDS },
-  { id: 'frontend',    label: 'Frontend',     kind: 'select', options: FRONTENDS },
-  { id: 'database',    label: 'Database',     kind: 'select', options: DATABASES },
-  { id: 'auth',        label: 'Auth',         kind: 'select', options: AUTHS },
+  { id: 'stack',       label: 'Your stack',   kind: 'stack' },
 ];
 
 // PURE inverse of buildBlueprintChoices (Eco-Day 63): a stored/loaded BlueprintChoices JSON →

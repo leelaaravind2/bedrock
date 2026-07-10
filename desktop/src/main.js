@@ -15,6 +15,7 @@ import {
   buildBlueprintChoices, choicesToSelections, TEMPLATES, STEPS, FIELD_TYPES, RELATIONSHIP_KINDS,
   newEntity, newField, newRelationship, TEAMTRACKER_EXAMPLE,
 } from './wizard-choices.js';
+import { STACK_FIELDS, applyStackFields } from './stack-fields.js';
 
 function tauriInvoke() {
   const t = window.__TAURI__;
@@ -125,6 +126,7 @@ function renderStep() {
 function renderSettingsStep() {
   const body = document.getElementById('wizard-body');
   const step = STEPS[stepIndex];
+  if (step.kind === 'stack') { renderStackStep(body); return; }
   const cur = selections[step.id];
   if (step.kind === 'text') {
     body.innerHTML = `<label>${step.label}</label>`;
@@ -133,6 +135,19 @@ function renderSettingsStep() {
     body.innerHTML = `<label>${step.label}</label>`;
     body.appendChild(select(step.options, cur, (v) => { selections[step.id] = v; }));
   }
+}
+
+// Eco-Day 73: the Stack screen — Backend / Frontend / Database / Auth on ONE screen. Each select
+// writes its OWN selection key through the pure, unit-tested applyStackFields mapping (stack-fields.js)
+// — the reviewable wiring the UI==CLI harness cannot check (it ignores STEPS/the DOM). The
+// FRONTENDLESS type↔frontend nicety stays in the engine (buildBlueprintChoices), not duplicated here.
+function renderStackStep(body) {
+  body.innerHTML = '';
+  for (const f of STACK_FIELDS) {
+    body.appendChild(h('label', {}, f.label));
+    body.appendChild(select(f.options, selections[f.key], (v) => { applyStackFields(selections, { [f.key]: v }); }));
+  }
+  body.appendChild(h('p', { class: 'hint' }, 'Your stack in one place. (Some project types run without a frontend — the engine sets Frontend to None for those regardless of this choice.)'));
 }
 
 // The dynamic data-model editor: add/remove entities → fields → relationships.
@@ -507,9 +522,17 @@ async function compareVersions() {
 
 function captureCurrentStep() {
   if (stepIndex >= STEPS.length) return; // data-model + review write to the model live
+  const step = STEPS[stepIndex];
+  if (step.kind === 'stack') {
+    // read the four Stack selects (rendered in STACK_FIELDS order) and apply via the pure mapping.
+    const selects = document.querySelectorAll('#wizard-body select');
+    const values = {};
+    STACK_FIELDS.forEach((f, i) => { if (selects[i]) values[f.key] = selects[i].value; });
+    applyStackFields(selections, values);
+    return;
+  }
   const el = document.querySelector('#wizard-body input, #wizard-body select');
   if (!el) return;
-  const step = STEPS[stepIndex];
   let v = el.value;
   if (step.id === 'projectName') v = v.trim() || 'MyApp';
   selections[step.id] = v;
