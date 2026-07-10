@@ -122,8 +122,9 @@ faithful extraction.** The anchor `9e01210c55a5` (asserted daily since Day 29) r
 module in both the backstop and `ui-cli`.
 
 **Diff scope:** `git diff --stat generator/src/` → `day20-regression.ts` (`1 insertion(+), 6 deletions(-)`)
-only; `file-digest.ts` is a new **tracked** file (`git status` shows `?? generator/src/core/file-digest.ts`
-— the `.gitignore` `/*` whitelist trap avoided; `.gitattributes` `eol=lf` keeps it LF).
+only; `file-digest.ts` is a new file that `git status` shows as `?? generator/src/core/file-digest.ts`
+— **untracked but NOT ignored** (the `.gitignore` `/*` whitelist trap avoided); it becomes **tracked at
+commit** (confirmed: it is in commit `604a3bc`). `.gitattributes` `eol=lf` keeps it LF.
 
 ---
 

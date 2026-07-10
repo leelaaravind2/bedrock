@@ -54,7 +54,7 @@ silent-failure risk today** — the anchor leg still makes any drifted copy fail
 
 **Gate result (unchanged — code untouched):**
 ```
-$ cd generator && npm run day20:regress → 203 OK / 0 FAIL · MAXIMAL 366e19d9deda1caf UNMOVED
+$ cd generator && npm run day20:regress   # derived: 203 OK / 0 FAIL · MAXIMAL 366e19d9deda1caf UNMOVED (grep -c + the MAXIMAL/PASS lines; Day 75d self-prints the total)
 $ cd desktop && npm run ui-cli → five digests reproduce, five DISTINCT, PASS
 $ git diff --stat generator/ → (empty)
 ```

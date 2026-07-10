@@ -87,7 +87,7 @@ NOT silently edit it; the capability/limitations refresh for the arc is schedule
 ```
 [digest-manifest] 103 digests asserted (43 frozen + 1 MAXIMAL)
 Day-20 regression: PASS (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)
-  → 203 OK / 0 FAIL
+  # derived: 203 OK / 0 FAIL   (grep -c '^  OK  '; the program printed the line above — Day 75d adds a self-printed total)
   → MAXIMAL composition cell twice-identical == recorded baseline  366e19d9deda1caf  (UNMOVED)
 $ git diff --stat generator/   → (empty)
 $ git status --porcelain

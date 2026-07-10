@@ -210,7 +210,17 @@ function styleOf(indent: string, naming: string, depth: string): CodingStyle {
 }
 function toMap(files: GeneratedFile[]): Map<string, string> { return new Map(files.map((f) => [f.relPath, f.content])); }
 let pass = true;
-function record(ok: boolean, label: string, extra = ''): void { if (!ok) pass = false; process.stdout.write(`  ${ok ? 'OK  ' : 'FAIL'} ${label}${extra ? '  ' + extra : ''}\n`); }
+// Eco-Day 75d: the backstop keeps its OWN OK/FAIL totals from the same record() calls, so the
+// "203 OK / 0 FAIL" figure everyone quotes is emitted BY THE PROGRAM at the tail — not a human's
+// `grep -c '^  OK  '` typeset as if the program printed it. The printed total and the grep are now
+// two INDEPENDENT measurements, permitted to disagree — that disagreement is the whole value (a
+// hardcoded total can never go red; a counter can — proven by the Day-75d mutation test).
+let okCount = 0;
+let failCount = 0;
+function record(ok: boolean, label: string, extra = ''): void {
+  if (ok) okCount += 1; else { pass = false; failCount += 1; }
+  process.stdout.write(`  ${ok ? 'OK  ' : 'FAIL'} ${label}${extra ? '  ' + extra : ''}\n`);
+}
 
 // ── Naming wire-key checks (day12 CHECKS, snake_case branch) ────────────────────
 async function namingWireKeys(backend: string): Promise<boolean> {
@@ -1780,7 +1790,9 @@ async function main(): Promise<void> {
 
   process.stdout.write(`\n[digest-manifest] ${digestManifest.length} digests asserted (43 frozen + 1 MAXIMAL)\n`);
   if (process.argv.includes('--emit-digests')) for (const d of digestManifest) process.stdout.write(`DIGEST ${d}\n`);
-  process.stdout.write(`\nDay-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);
+  // Eco-Day 75d: the program's own totals, from the record() counters — never a hardcoded literal.
+  process.stdout.write(`\n${okCount} OK / ${failCount} FAIL  (the backstop's own record() totals — not a grep)\n`);
+  process.stdout.write(`Day-20 regression: ${pass ? 'PASS' : 'FAIL'} (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)\n`);
   if (!pass) process.exit(1);
 }
 

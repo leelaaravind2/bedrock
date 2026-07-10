@@ -83,7 +83,7 @@ $ cd generator && npm run build          # tsc — no source drift; git diff gen
 $ npm run day20:regress
 [digest-manifest] 103 digests asserted (43 frozen + 1 MAXIMAL)
 Day-20 regression: PASS (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)
-  → 203 OK / 0 FAIL ; MAXIMAL 366e19d9deda1caf unmoved
+  # derived: 203 OK / 0 FAIL ; MAXIMAL 366e19d9deda1caf unmoved   (grep -c '^  OK  ' + the MAXIMAL OK line; Day 75d self-prints the total)
   → Spring Boot|PostgreSQL|TeamTracker  9e01210c55a5a0a6   (the anchor, reproduced by the engine)
 ```
 
@@ -116,7 +116,7 @@ Step 1→2→…→Review 8/8 renders the correct BlueprintChoices JSON. **0 con
 ```
 [digest-manifest] 103 digests asserted (43 frozen + 1 MAXIMAL)
 Day-20 regression: PASS (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)
-  → 203 OK / 0 FAIL
+  # derived: 203 OK / 0 FAIL   (grep -c '^  OK  '; the program printed the lines above — Day 75d adds a self-printed total)
   → MAXIMAL composition cell twice-identical == recorded baseline  366e19d9deda1caf  (UNMOVED)
 $ git diff --stat generator/   → (empty)
 $ git status --porcelain

@@ -78,7 +78,7 @@ code issue.)
 **A73-3 — day close:**
 ```
 Day-20 regression: PASS (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)
-  → 203 OK / 0 FAIL
+  # derived: 203 OK / 0 FAIL   (grep -c '^  OK  '; the program printed the line above — Day 75d adds a self-printed total)
   → MAXIMAL composition cell twice-identical == recorded baseline  366e19d9deda1caf  (UNMOVED)
 $ git diff --stat generator/   → (empty)
 $ git status --porcelain

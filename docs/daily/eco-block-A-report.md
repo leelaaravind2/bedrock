@@ -183,7 +183,7 @@ this session** (R1).
 ```
 # backstop, from clean
 rm -rf dist && npm run build && npm run day20:regress
-  → 203 OK / 0 FAIL · [digest-manifest] 103 digests asserted (43 frozen + 1 MAXIMAL)
+  # derived: 203 OK / 0 FAIL (grep -c '^  OK  ')  ·  program: [digest-manifest] 103 digests asserted (43 frozen + 1 MAXIMAL)
   → MAXIMAL composition cell twice-identical == recorded baseline  366e19d9deda1caf
   → Spring Boot|PostgreSQL|TeamTracker  9e01210c55a5a0a6
 
@@ -195,7 +195,9 @@ npm run ui-cli
 # stack mapping
 npm run test:stack → stack-fields unit test: PASS (6 checks)
 ```
-**All three matched the close records byte-for-byte.** No R1 disagreement → no STOP.
+**All three matched the close records on every figure the program emits** (the digests, the DIGEST
+lines, the PASS line, MAXIMAL; the "203 OK / 0 FAIL" total was a `grep -c` in both, agreeing — as of
+Day 75d the backstop prints that total itself). No R1 disagreement → no STOP.
 
 **R3 anchor tie (both strings quoted):**
 - harness `ui-cli-proof.mjs:82` → `9e01210c55a5a0a6d5c43cfa7e282a0b47f5f47f8780bbe48a733b3fe5e45d66`

@@ -35,7 +35,7 @@ A74-1. **No `generator/src` change; no `tauri.conf.json` change.**
 $ cd generator && rm -rf dist && npm run build && npm run day20:regress
 [digest-manifest] 103 digests asserted (43 frozen + 1 MAXIMAL)
 Day-20 regression: PASS (43 frozen + 1 MAXIMAL + 5 version baselines + non-hash checks + property re-derivations)
-  → 203 OK / 0 FAIL
+  # derived: 203 OK / 0 FAIL   (grep -c '^  OK  '; the program printed the lines above — Day 75d adds a self-printed total)
   → MAXIMAL composition cell twice-identical == recorded baseline  366e19d9deda1caf  (UNMOVED)
 ```
 
@@ -65,7 +65,7 @@ UI==CLI harness: PASS
 
 **A75-4 — release docs + F1, backstop still green, git scope docs/config only:**
 ```
-  → 203 OK / 0 FAIL ; MAXIMAL 366e19d9deda1caf unmoved
+  # derived: 203 OK / 0 FAIL ; MAXIMAL 366e19d9deda1caf unmoved   (grep -c '^  OK  ' + the MAXIMAL OK line; Day 75d self-prints the total)
 $ git diff --stat generator/   → (empty)
 $ git status (Day-75 scope): CAPABILITIES.md, RELEASE-NOTES.md,
   docs/files/THRAKSHA-FORWARD-PLAN.md, docs/files/THRAKSHA-KNOWLEDGE-BOOK.md, docs/daily/*  (all docs)
