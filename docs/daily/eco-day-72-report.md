@@ -58,9 +58,10 @@ $ (cd desktop && npm run ui-cli)
 $ git diff --stat generator/                → (empty)
 $ git diff -- desktop/src/wizard-choices.js → (empty)
 ```
-Live preview (static server, plain browser — no Tauri): Create → wizard; nav → Workspace shows the
+Inspected in a plain browser without Tauri (static server; unreproducible — no committed test;
+PENDING (Leela)) [downgraded Day 75b/audit, F12-A]: Create → wizard; nav → Workspace shows the
 **empty state** (`workspace-body` hidden ⇒ Advanced corner absent without a project); revealing the
-body confirms the verb bar (Edit / Preview impact / Verify / Export / Save version / Redraw diagram /
+body shows the verb bar (Edit / Preview impact / Verify / Export / Save version / Redraw diagram /
 Flow map) and the Advanced corner (Compare, All saved projects, Detect, Flow map, Impact preview,
 Scan, Export) nested inside it (`advanced-corner.closest('#workspace-body')` === body). Review end
 now reads `Create project ▸` / `Create project`; the old `#target-dir` input is gone. **0 console

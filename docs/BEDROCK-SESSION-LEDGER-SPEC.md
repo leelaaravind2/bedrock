@@ -1,7 +1,7 @@
 # THE SESSION LEDGER — SPEC
 ### `docs/daily/eco-block-A-ledger.md` · the resume file, not the record
 
-> **In-repo home:** `docs/prompts/BEDROCK-SESSION-LEDGER-SPEC.md`
+> **In-repo home:** `docs/BEDROCK-SESSION-LEDGER-SPEC.md` <!-- F1 correction (Block-A audit): docs/ root, not docs/prompts/. -->
 > Referenced verbatim by the Block-A PLAN, EXECUTE and REPORT prompts.
 
 ---

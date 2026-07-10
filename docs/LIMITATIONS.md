@@ -81,5 +81,15 @@ security, or bug-freedom. (`docs/manual/08-verify.md`.)
 - `detect_toolchains` is a shell-out to the certified probe (it reports what machine tools a stack needs;
   it installs nothing).
 
+## A note on the word "verified" in older reports (Block-A audit, F18)
+
+Pre-Block-A daily reports (e.g. `docs/daily/eco-day-18-report.md`, `eco-day-68-report.md`) use "verified
+live" for **static-preview / stub-backend** observations of the shell — inspections, not reproducible
+gated proofs. Those reports are **left unedited on purpose**: a daily report is the record of what a
+session claimed at the time, and rewriting it destroys the audit trail. The practice was corrected at
+**Eco-Day 75b**, after which live-preview observations are phrased *"inspected in a plain browser without
+Tauri; unreproducible; PENDING (Leela),"* and reproducible proofs are one command with pasted output.
+Read older "verified live" phrasing as **"inspected,"** not as a gated proof.
+
 For the strengths side of this ledger, read `CAPABILITIES.md` alongside this file — neither is complete
 without the other.

@@ -12,14 +12,16 @@ that wasn't run, say so plainly.
 The full knowledge transfer now lives in four documents produced this session. **Confirm they
 are committed to the repo before anything else** (they were delivered as files; if absent,
 ask me for them):
-- `docs/THRAKSHA-KNOWLEDGE-BOOK.md` — the complete KT: the map and borders, the history,
+- `docs/files/THRAKSHA-KNOWLEDGE-BOOK.md` — the complete KT: the map and borders, the history,
   **how to think (Part III — 14 cognitive moves)**, how to do, the checks pin-to-pin,
   37 consolidated rules, cold-start protocols, glossary. Authority order it declares:
   **code > reports > governing docs > the book.**
-- `docs/THRAKSHA-FORWARD-PLAN.md` — the day-by-day plan, Day 71 → Day 116, with decision
+- `docs/files/THRAKSHA-FORWARD-PLAN.md` — the day-by-day plan, Day 71 → Day 116, with decision
   gates, Stage-2 triggers, and plan-maintenance rules.
-- `docs/prompts/BEDROCK-MASTER-CHANGE-PROMPT.md` — the template every build day fills.
-- `docs/prompts/BEDROCK-DOCS-DAY-PROMPT.md` — Day 74's complete prompt (run AFTER Day 72).
+- `docs/files/BEDROCK-MASTER-CHANGE-PROMPT.md` — the template every build day fills.
+- `docs/files/BEDROCK-DOCS-DAY-PROMPT.md` — Day 74's complete prompt (run AFTER Day 72).
+<!-- F1/F17-F path corrections (Block-A audit): these live in docs/files/, not docs/prompts/ or docs/ root. -->
+
 
 This handoff is the orientation; those four are the operating system. On conflict, the repo wins.
 

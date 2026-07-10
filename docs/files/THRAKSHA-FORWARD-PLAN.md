@@ -1,7 +1,7 @@
 # THRAKSHA / BEDROCK — THE FORWARD PLAN (Day 71 → Stage 2)
 ### The day-by-day reference. Any session — human, Claude, or other — executes days from here via the Master Change Prompt.
 
-> **In-repo home:** `docs/THRAKSHA-FORWARD-PLAN.md` · **Companion:** `docs/THRAKSHA-KNOWLEDGE-BOOK.md` (read Parts I–III first).
+> **In-repo home:** `docs/files/THRAKSHA-FORWARD-PLAN.md` · **Companion:** `docs/files/THRAKSHA-KNOWLEDGE-BOOK.md` (read Parts I–III first). <!-- F23 (Block-A audit): docs/files/ paths. -->
 > **How to use:** each day below fills the Master Change Prompt's slots (Appendix A of the
 > Knowledge Book). Session 1 (PLAN) reads the real code and CORRECTS this plan where the code
 > disagrees — this plan is a hypothesis, the repo is the experiment. Day numbers continue the

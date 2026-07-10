@@ -1,7 +1,7 @@
 # THRAKSHA / BEDROCK — THE KNOWLEDGE BOOK
 ### The complete knowledge transfer. For any LLM, any Claude, any human who must understand, review, or extend this software.
 
-> **In-repo home:** `docs/THRAKSHA-KNOWLEDGE-BOOK.md`
+> **In-repo home:** `docs/files/THRAKSHA-KNOWLEDGE-BOOK.md` <!-- F23 (Block-A audit): docs/files/, not docs/ root. -->
 > **Authority order (memorize this first):** THE CODE > the daily reports > the governing docs > this book.
 > This book orients you; it is never the final word. If this book and the repo disagree, the repo
 > is right and the disagreement is a finding to report. A knowledge book that claims final
@@ -486,7 +486,7 @@ appear in the Master Change Prompt (Appendix A) and must be pasted into every ex
 | `docs/daily/eco-day-NN-{plan,report}.md` | The ground-truth record of every day. The latest report = current state. |
 | `docs/THRAKSHA-GUARDRAILS.md` | The constitution (§1.1 no silent moves; §3 STOP; §4 honesty; §5 claims). |
 | `docs/THRAKSHA-ECOSYSTEM-PLAN.md`, `THRAKSHA-MONTH-1/2/3.md`, `THRAKSHA-MONTH-3 ex.md` | The governing arc docs (historical + 61–70). |
-| `docs/THRAKSHA-FORWARD-PLAN.md` | The governing doc for Day 71 onward (the companion to this book). |
+| `docs/files/THRAKSHA-FORWARD-PLAN.md` | The governing doc for Day 71 onward (the companion to this book). |
 | ADR-001…005, Law 21, Law 25 | The architectural decisions; read the files, don't paraphrase. |
 | Root `README.md`, `CAPABILITIES.md`, `RELEASE-NOTES.md` | The public honest claims (CAPABILITIES v0.2.0 current; `docs/CAPABILITIES-v0.1.0.md` superseded, preserved). |
 | `desktop/src-tauri/msix/README.md` | The 4-step Store runbook. |
@@ -603,5 +603,5 @@ generated-base/hand-written-extension pattern for safe regeneration; never prote
 gate** — a choice reserved for Leela, blocking a named step.
 
 ---
-*End of the Knowledge Book. The companion is `docs/THRAKSHA-FORWARD-PLAN.md`. The authority
+*End of the Knowledge Book. The companion is `docs/files/THRAKSHA-FORWARD-PLAN.md`. The authority
 order stands: code > reports > governing docs > this book. Keep it that way.*
