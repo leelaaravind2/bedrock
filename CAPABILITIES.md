@@ -91,6 +91,19 @@ sweep clean).
 
 ---
 
+### The product SHELL — Days 71–75 (post-v0.2.0 refinement, hash-neutral; the engine is unchanged)
+
+A shell/UX arc over the **unchanged certified engine**: no `generator/src` change, no frozen hash moved,
+MAXIMAL `366e19d9…` unmoved (re-proven from clean, Eco-Day 75). Each item at its honest level.
+
+| Capability | Certified level | Proof location |
+|---|---|---|
+| **Screen-routed product** — Welcome → full-window wizard → workspace; one screen at a time | Shell/UI (pure state); serializer + engine untouched | Eco-Day 71/72 close records; `npm run ui-cli` unchanged |
+| **The workspace** — diagram front and centre + verbs (Edit / Preview impact / Verify / Export / Save version), each calling an EXISTING certified command; Advanced corner reachable only once a project exists; **abstract project handle** `{name,choices,storeId?}` | Shell/UI wiring; **each verb round-trip is live = PENDING (Leela)**; zero new engine capability | Eco-Day 72 close record; the live verbs are §5-class honest-manual |
+| **Committed UI==CLI harness** — `desktop/tools/ui-cli-proof.mjs` (`npm run ui-cli`): one command, five DISTINCT digests, byte-identical to the committed baselines | Generation-deterministic, **anchored** to the frozen TeamTracker digest `9e01210c55a5…` (inside the 103) | Eco-Day 71 close record (A71-1a anchor); closes finding F3 |
+| **The Stack regroup** — Backend/Frontend/Database/Auth on one screen via a pure, **unit-tested** field→key mapping; `buildBlueprintChoices` untouched | Serializer meaning byte-identical (harness reproduces all five incl. TeamTracker); the field→key wiring **unit-tested** (`npm run test:stack`); the full in-Bedrock click is live = PENDING (Leela) | Eco-Day 73 close record |
+| **The documentation set** — `docs/manual/` (00–11), `docs/architecture/`, `docs/LIMITATIONS.md` | Docs (every claim carries a proof pointer); backstop green (docs move no hash) | Eco-Day 74 report |
+
 ## 4. The complete boundary ledger (every one — carried from Eco-Day 69, none dropped)
 
 - **Verification levels (the stacks):** **Express runtime/booted**; **FastAPI/Django syntax-level**;
@@ -135,6 +148,13 @@ impact → compare versions → Verify → friendly errors) is delivered in
 [`docs/daily/eco-day-69-report.md`](docs/daily/eco-day-69-report.md) §3. As of this release it is
 **PENDING** — to be run on Leela's Windows machine before/alongside the Store submission (Store runbook
 step 2). No live GUI run is claimed. See [`RELEASE-NOTES.md`](RELEASE-NOTES.md).
+
+**Days 71–75 changed the shell** (screen router, workspace, Stack regroup), so the walkthrough must be
+re-run on the **new** shell. The specific new-shell live wiring — Welcome's two buttons + the live
+saved-project list; Create → workspace; each workspace verb round-trip (Edit / Preview impact / Verify /
+Export / Save version); the Stack screen's four fields inside Bedrock — is **PENDING (Leela)**, named in
+[`docs/daily/eco-day-75-report.md`](docs/daily/eco-day-75-report.md). No live GUI run of the new shell is
+claimed here.
 
 ---
 

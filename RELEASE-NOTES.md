@@ -1,5 +1,50 @@
 # Bedrock — Release Notes
 
+## Days 71–75 — the product shell (post-v0.2.0 refinement, hash-neutral)
+
+A **shell/UX arc** over the **unchanged certified v0.2.0 engine**. The desktop app became a proper
+screen-routed product, and the UI==CLI proof was committed as a runnable gate. **No `generator/src`
+change; no frozen hash moved; the crown-jewel MAXIMAL `366e19d9…` is unmoved.** The engine certification
+(v0.2.0) is carried, not re-opened.
+
+**What changed (shell only):**
+- **A screen router** — the app opens on **Welcome** and shows one screen at a time: Welcome → the
+  **full-window guided wizard** → the **project workspace**. The old wall of cards is gone.
+- **The workspace** — Create (= `save_blueprint` only) opens a project's home: the **diagram front and
+  centre**, with verbs **Edit / Preview impact / Verify / Export / Save version**, each calling an
+  existing certified command. The raw command harness moved to an **Advanced corner**, reachable only
+  once a project exists. The workspace reads an **abstract project handle** (`{ name, choices, storeId? }`),
+  never a bare store row — so the later file-as-truth change is a store swap, not a UI rewrite.
+- **The Stack regroup** — Backend / Frontend / Database / Auth collected on **one Stack screen** (four
+  fields) instead of four steps, via a pure, **unit-tested** field→key mapping. The blueprint's meaning
+  is unchanged (the serializer is untouched).
+- **A committed UI==CLI harness** — `desktop/tools/ui-cli-proof.mjs` (`npm run ui-cli`): a single command
+  that re-proves the wizard's blueprint is byte-identical to the CLI's for all five templates, anchored
+  to the frozen TeamTracker digest `9e01210c55a5…` (inside the backstop's 103). Previously this proof was
+  ad-hoc and uncommitted (finding F3, now closed).
+- **The full documentation set** — `docs/manual/` (00–11), `docs/architecture/` (ARCHITECTURE /
+  DETERMINISM / VERIFICATION-LADDER), and `docs/LIMITATIONS.md`.
+
+**Re-certified (from clean, Eco-Day 75):**
+- `rm -rf dist && npm run build && npm run day20:regress` → **203 OK / 0 FAIL**, 103 digests, MAXIMAL
+  `366e19d9…` unmoved.
+- **Packaged == certified:** the bundled node (`node-x86_64-pc-windows-msvc.exe`) against
+  `resources/gen/dist/day20-regression.js --emit-digests` is **byte-identical** to the certified engine —
+  103 DIGEST lines, MAXIMAL reproduced. The sync-gen stamp `83ffd0ad…` is **unchanged** from Day 70 (the
+  arc added no generator dist entries) — not a hash move.
+- **UI==CLI:** `npm run ui-cli` reproduces all five digests (TeamTracker + blank/restApi/crud/worker).
+
+**Still deferred / honest-manual (Leela's machine — the shell has no GUI here):** the full in-Bedrock
+walkthrough on the new shell (Welcome buttons + the live saved-project list; Create → workspace; each
+workspace verb round-trip; the Stack screen inside Bedrock) — **PENDING**, alongside the existing Half-B
+checklist (`docs/daily/eco-day-69-report.md` §3). See `docs/LIMITATIONS.md`.
+
+**Installer version note:** `tauri.conf.json` still carries `0.1.0`; the `0.2.0` string is set at the
+Store **submission wrap** (a one-line manifest edit that moves no frozen hash). This arc did **not** bump
+it. The determinism certification is version-string-independent.
+
+---
+
 ## v0.2.0 — the end-user product (the close of the 70-day build)
 
 **Bedrock v0.2.0** is the close of the 70-day build: the deterministic, AI-free generator **+ the

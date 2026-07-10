@@ -526,7 +526,7 @@ with a hidden red is the only real failure this project recognizes.
 
 # APPENDIX A — THE MASTER CHANGE PROMPT (canonical template)
 
-> Standalone copy: `docs/prompts/BEDROCK-MASTER-CHANGE-PROMPT.md`. Fill every {SLOT};
+> Standalone copy: `docs/files/BEDROCK-MASTER-CHANGE-PROMPT.md` (F1 correction, Day 75). Fill every {SLOT};
 > delete nothing else. Run once as PLAN, review, then as EXECUTE+REPORT.
 
 **MODE: {PLAN | EXECUTE+REPORT}**
@@ -573,7 +573,7 @@ documented baseline change / PENDING list / commit hash) → commit
 
 # APPENDIX B — THE DOCUMENTATION-DAY PROMPT
 
-> Standalone copy: `docs/prompts/BEDROCK-DOCS-DAY-PROMPT.md`. Run AFTER Day 72. Produces
+> Standalone copy: `docs/files/BEDROCK-DOCS-DAY-PROMPT.md` (F1 correction, Day 75). Run AFTER Day 72. Produces
 > `docs/manual/` (00-overview → 11-faq), `docs/architecture/` (ARCHITECTURE, DETERMINISM,
 > VERIFICATION-LADDER), `docs/LIMITATIONS.md`, and a root README alignment pass — docs-only,
 > every claim with a proof pointer, the three verbatim honesty lines embedded (Verify /

@@ -89,8 +89,9 @@ every close. Live GUI checks are Leela's and stay PENDING until she runs them.
   check **PENDING (Leela)**.
 
 ### Day 74 — Documentation day
-- Run `docs/prompts/BEDROCK-DOCS-DAY-PROMPT.md` exactly as written (Knowledge Book
-  Appendix B). Docs-only; every claim carries a proof pointer; the three verbatim honesty
+- Run `docs/files/BEDROCK-DOCS-DAY-PROMPT.md` exactly as written (Knowledge Book
+  Appendix B). <!-- F1 path correction (Eco-Day 75): the prompt lives in docs/files/, not docs/prompts/. -->
+ Docs-only; every claim carries a proof pointer; the three verbatim honesty
   lines embedded; `[SCREENSHOT-NEEDED]` list collected for Leela; backstop tail pasted.
 
 ### Day 75 — Re-certify + release the shell arc
