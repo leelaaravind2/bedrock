@@ -45,6 +45,12 @@ difference between guessing and knowing.
   AI advisory scan (never the gate).
 
 **The product (built over the frozen certified engine):**
+
+The desktop app is **screen-routed** — it opens on a **Welcome**, flows through the **guided wizard**
+(App name → Project type → Your stack → Data model → Review), and **Create** opens the project's
+**workspace**: the diagram front and centre, with Edit / Preview impact / Verify / Export / Save-versions
+(the raw command harness tucked in an Advanced corner). One screen at a time.
+
 - **A guided wizard** — describe your app; the wizard's blueprint is byte-identical to the CLI's
   (UI==CLI).
 - **Persistent projects** — save a blueprint, load it back; the round-trip is lossless and it generates
@@ -72,6 +78,17 @@ FAIL, MAXIMAL `366e19d9…`**. Same input → byte-identical output. The crown-j
 moved from Eco-Day 29 through Eco-Day 70.
 
 ---
+
+## Documentation
+
+- **End-user manual** — [`docs/manual/00-overview.md`](docs/manual/00-overview.md) through `11-faq.md`
+  (install, the wizard, the data model, save/load, the Map, impact preview, compare, Verify, export,
+  troubleshooting, FAQ).
+- **Architecture** — [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md),
+  [`DETERMINISM.md`](docs/architecture/DETERMINISM.md),
+  [`VERIFICATION-LADDER.md`](docs/architecture/VERIFICATION-LADDER.md).
+- **The complete limitations ledger** — [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) (read alongside
+  [`CAPABILITIES.md`](CAPABILITIES.md); neither is complete without the other).
 
 ## Going live (the Microsoft Store)
 

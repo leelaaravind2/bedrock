@@ -10,11 +10,11 @@ Execute-session baseline (this session, before any code): `git log -1` = `d2529d
 > reports remain the certified record.
 
 ## STATUS
-Current day: 73 → CLOSED. Next day: 74.
-Current task: A73-3 — DONE (day close). All of Day 73 DONE (live Stack wiring demonstrated in a plain browser; full in-Bedrock click-through PENDING-Leela).
-Next task: A74-1
-Backstop last run (A73-3 close): 2026-07-10 → **203 OK / 0 FAIL**; MAXIMAL `366e19d9deda1caf` UNMOVED. Harness 5/5 distinct incl. TeamTracker unchanged. `git diff --stat generator/` empty.
-Day-73 commit: (pending this session's day-close commit)
+Current day: 74 → CLOSED. Next day: 75.
+Current task: A74-1 — DONE (docs day). Docs-only; backstop 203/0; git only docs.
+Next task: A75-1
+Backstop last run (A74-1): 2026-07-10 → **203 OK / 0 FAIL**; MAXIMAL `366e19d9deda1caf` UNMOVED. `git diff --stat generator/` empty.
+Day-73 commit: `92393b3`. Day-74 commit: (pending this session's day-close commit).
 Backstop last run (A72-3 close): 2026-07-10 → **203 OK / 0 FAIL**; MAXIMAL `366e19d9deda1caf` UNMOVED. `git diff --stat generator/` empty. Harness 5/5 distinct unchanged.
 Day-72 commit: `f1b665f` — "eco-day-72: Create -> workspace + diagram-centred workspace with certified-command verbs + Advanced corner (backstop green, 203 OK / 0 FAIL)". Pre-commit backstop GREEN. Not pushed.
 Backstop last run (A71-5 close): 2026-07-10 → **203 OK / 0 FAIL**; MAXIMAL `366e19d9deda1caf` UNMOVED; 103 digests asserted. `git diff --stat generator/` empty.
@@ -45,7 +45,7 @@ MAXIMAL 366e19d9: UNMOVED
 | A73-1 | 73 | Pure mapping module {backend,frontend,database,auth}→selections.* + unit test; buildBlueprintChoices UNTOUCHED | **DONE** | `npm run test:stack` | **PASS (6 checks)** — STACK_FIELDS keys in order; each field's certified choice set; applyStackFields writes each field to its own key; the wrong-key guard (database↛auth); unrelated keys untouched; null no-op | desktop/src/stack-fields.js (new); desktop/tools/stack-fields.test.mjs (new); desktop/package.json (test:stack) |
 | A73-2 | 73 | The Stack screen: 4 settings steps → 1 screen, 4 fields, calling the A73-1 mapping; STEPS + renderSettingsStep/captureCurrentStep edited; FRONTENDLESS stays in engine | **DONE** | `npm run ui-cli` reproduces ALL 5 incl. TeamTracker | **PASS** — harness 5/5 distinct, TeamTracker `9e01210c55a5` + blank/restApi/crud/worker all exact. `git diff wizard-choices.js` = STEPS block ONLY (buildBlueprintChoices/toFieldSpec/toEntitySpec/TEMPLATES/TEAMTRACKER_EXAMPLE/FRONTENDLESS untouched). Live (fresh-origin preview): wizard 8→5 steps; Stack screen renders 4 fields; setting Go/None/MySQL/None writes selections.{backend,frontend,database,auth} EXACTLY (no cross-wiring); 0 console errors | desktop/src/wizard-choices.js (STEPS only), desktop/src/main.js |
 | A73-3 | 73 | ✦ DAY-73 CLOSE — engine untouched | **DONE** | backstop 203/0; MAXIMAL unmoved; git diff generator/ empty | **PASS** — 203 OK / 0 FAIL; MAXIMAL `366e19d9deda1caf` unmoved; harness 5/5 distinct unchanged; unit test PASS (6); `git diff --stat generator/` empty; launch.json reverted; scope = shell + tools + docs only | (none) |
-| A74-1 | 74 | Run `docs/files/BEDROCK-DOCS-DAY-PROMPT.md` exactly as written (docs-only; AFTER Day 72) | NOT-STARTED | backstop 203/0 AND git shows only docs | not yet run | docs/ only |
+| A74-1 | 74 | Run `docs/files/BEDROCK-DOCS-DAY-PROMPT.md` exactly as written (docs-only; AFTER Day 72) | **DONE** | backstop 203/0 AND git shows only docs | **PASS** — 12 manual + 3 architecture + docs/LIMITATIONS.md + README alignment; backstop 203 OK / 0 FAIL, MAXIMAL unmoved; `git status` = docs only (README + docs/*); all new files under whitelisted docs/ (check-ignore empty), NO new root file; 11 SCREENSHOT-NEEDED collected; CAPABILITIES.md cross-checked (no conflict, not edited); report `eco-day-74-report.md` | docs/manual/*, docs/architecture/*, docs/LIMITATIONS.md, README.md |
 | A75-1 | 75 | Full backstop FROM CLEAN | NOT-STARTED | 203/0 from clean; MAXIMAL unmoved | not yet run | (none) |
 | A75-2 | 75 | Packaged == certified (bundled node reproduces the 103) | NOT-STARTED | bundled-node emit-digests reproduces 103 (else PENDING-Leela) | not yet run | (build artifacts) |
 | A75-3 | 75 | Consolidated UI==CLI statement (re-run harness) | NOT-STARTED | harness reproduces all digests | not yet run | (none) |
