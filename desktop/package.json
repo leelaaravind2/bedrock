@@ -6,7 +6,8 @@
   "scripts": {
     "tauri": "tauri",
     "sync-gen": "node ../scripts/sync-generator-resources.mjs",
-    "sync-gen:check": "node ../scripts/sync-generator-resources.mjs --check"
+    "sync-gen:check": "node ../scripts/sync-generator-resources.mjs --check",
+    "ui-cli": "node tools/ui-cli-proof.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

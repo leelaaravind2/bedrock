@@ -8,11 +8,37 @@
       :root { color-scheme: light dark; }
       html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; color: #1a1a1a; background: #f6f6f6; }
       @media (prefers-color-scheme: dark) { html, body { color: #eee; background: #1e1e1e; } }
-      header { padding: 0.75rem 1rem; border-bottom: 1px solid #8883; }
-      header h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.02em; }
-      header p { margin: 0.15rem 0 0; font-size: 0.8rem; opacity: 0.7; }
-      main { display: grid; grid-template-columns: 360px 1fr; gap: 0; height: calc(100% - 4rem); }
-      .left { overflow-y: auto; padding: 0.75rem; border-right: 1px solid #8883; }
+      body { display: flex; flex-direction: column; }
+      header { padding: 0.75rem 1rem; border-bottom: 1px solid #8883; flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+      header .brand h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.02em; cursor: pointer; }
+      header .brand p { margin: 0.15rem 0 0; font-size: 0.8rem; opacity: 0.7; }
+      nav.topnav { display: flex; gap: 0.4rem; }
+      nav.topnav[hidden] { display: none; }
+      /* ── Eco-Day 71: the screen router. One screen at a time; the shared results pane shows
+           alongside the wizard/workspace, never on Welcome. Pure CSS over a data attribute the
+           router sets — no generation logic, no serializer touch. ── */
+      main { flex: 1 1 auto; min-height: 0; display: flex; }
+      .screen { display: none; min-height: 0; overflow-y: auto; padding: 0.75rem; }
+      .results { display: none; flex: 1 1 auto; min-width: 0; overflow: auto; padding: 0.75rem; }
+      main[data-screen="welcome"] #screen-welcome { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; }
+      /* Eco-Day 71 (A71-4): the wizard is FULL-WINDOW — a single centered column (the steps,
+         then the generation output below), not a 360px sidebar card. Layout only; the steps and
+         their semantics are untouched (renderStep/wizard-choices.js unchanged). */
+      main[data-screen="wizard"] { flex-direction: column; align-items: center; overflow-y: auto; }
+      main[data-screen="wizard"] #screen-wizard { display: block; width: 100%; max-width: 680px; flex: 0 0 auto; }
+      main[data-screen="wizard"] #results-pane { display: block; width: 100%; max-width: 680px; flex: 0 0 auto; border-top: 1px solid #8883; }
+      main[data-screen="workspace"] #screen-workspace { display: block; flex: 0 0 360px; border-right: 1px solid #8883; }
+      main[data-screen="workspace"] #results-pane { display: block; }
+      /* the Welcome screen (content wired in main.js) */
+      .welcome-inner { max-width: 30rem; text-align: center; padding: 1rem; }
+      .welcome-inner h2 { font-size: 1.9rem; margin: 0 0 0.4rem; letter-spacing: 0.01em; }
+      .welcome-inner .lede { font-size: 0.95rem; opacity: 0.75; margin: 0 0 1.5rem; line-height: 1.5; }
+      .welcome-actions { display: flex; flex-direction: column; gap: 0.6rem; align-items: stretch; }
+      .welcome-actions button { padding: 0.7rem 1rem; font-size: 0.95rem; }
+      .welcome-projects { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.25rem; text-align: left; }
+      .welcome-projects .project-item { text-align: left; font-size: 0.82rem; }
+      .welcome-projects .empty { font-size: 0.75rem; opacity: 0.6; }
+      .workspace-placeholder { border-style: dashed; }
       .card { border: 1px solid #8883; border-radius: 8px; padding: 0.7rem; margin-bottom: 0.7rem; }
       .card h2 { margin: 0 0 0.5rem; font-size: 0.95rem; }
       label { display: block; font-size: 0.72rem; opacity: 0.75; margin: 0.4rem 0 0.15rem; }
@@ -75,11 +101,34 @@
   </head>
   <body>
     <header>
-      <h1>Bedrock</h1>
-      <p>Describe your app; get exact, reproducible code — no AI in the generation path.</p>
+      <div class="brand">
+        <h1 id="brand-home" title="Back to Welcome">Bedrock</h1>
+        <p>Describe your app; get exact, reproducible code — no AI in the generation path.</p>
+      </div>
+      <nav class="topnav" id="topnav" hidden>
+        <button class="ghost" id="nav-new">New project</button>
+        <button class="ghost" id="nav-workspace">Workspace</button>
+      </nav>
     </header>
-    <main>
-      <section class="left">
+    <main id="app" data-screen="welcome">
+
+      <!-- ── Screen 0: Welcome (Eco-Day 71). Product name, one line, two buttons. Behaviour
+           and the LIVE saved-blueprint list are wired in main.js (A71-3). ── -->
+      <section class="screen welcome" id="screen-welcome">
+        <div class="welcome-inner">
+          <h2>Bedrock</h2>
+          <p class="lede">Describe your app once; get exact, reproducible code — the same blueprint always generates byte-identical output. No AI in the generation path.</p>
+          <div class="welcome-actions">
+            <button id="welcome-create">Create a new project</button>
+            <button class="ghost" id="welcome-open">Open a saved project</button>
+          </div>
+          <div class="welcome-projects" id="welcome-projects" hidden><!-- saved blueprints injected (A71-3) --></div>
+        </div>
+      </section>
+
+      <!-- ── Screen 1: the guided wizard, full-window. Templates + the six settings steps →
+           data model → review. Steps & semantics UNCHANGED from Day 62. ── -->
+      <section class="screen wizard" id="screen-wizard">
         <!-- Templates: pre-filled starting points (pure data — editable). -->
         <div class="card">
           <h2>Start from a template</h2>
@@ -95,6 +144,16 @@
             <button class="ghost" id="wizard-back">Back</button>
             <button id="wizard-next">Next</button>
           </div>
+        </div>
+      </section>
+
+      <!-- ── Screen 2: the workspace. Eco-Day 71 = a PLACEHOLDER banner + the existing certified
+           flows kept reachable (project view, my projects, compare, the Advanced harness). Eco-Day
+           72 rebuilds this into the diagram-centred workspace with verbs + an Advanced corner. ── -->
+      <section class="screen workspace" id="screen-workspace">
+        <div class="card workspace-placeholder">
+          <h2>Your project workspace</h2>
+          <p class="hint">A placeholder for now. On the next build day this becomes your project's home — the diagram front and centre with Edit / Preview impact / Verify / Export / Save-versions. Today, every certified flow below stays reachable.</p>
         </div>
 
         <!-- Project view (Eco-Day 64): the maps run on YOUR blueprint. Preview an edit's exact impact. -->
@@ -174,7 +233,9 @@
         </details>
       </section>
 
-      <section class="results">
+      <!-- ── The shared engine-output pane. Visible alongside the wizard and workspace; hidden on
+           Welcome. Single #status / #diagram / #output — the engine's own text, rendered verbatim. ── -->
+      <section class="results" id="results-pane">
         <p id="status">Fill the wizard (or pick a template), then Generate. A rejected call = an environment problem; a completed run (any exit code) = data.</p>
         <div id="diagram" class="diagram" hidden><!-- the certified flow-svg is inserted here (thin display) --></div>
         <pre id="output" class="info">No project generated yet.</pre>

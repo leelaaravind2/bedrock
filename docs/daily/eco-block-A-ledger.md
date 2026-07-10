@@ -1,7 +1,8 @@
 # BLOCK A — SESSION LEDGER
-Last written: 2026-07-10T00:00Z · Session: 1 · Mode: PLAN
-Baseline at block open: commit `ff6e991` · backstop 203 OK / 0 FAIL · MAXIMAL `366e19d9`
-Plan-write progress (this session): [x] 71 · [x] 72 · [x] 73 · [x] 74 · [x] 75 · [x] ledger opened · [x] findings (10) — PLAN session complete
+Last written: 2026-07-10T00:00Z · Session: 2 · Mode: EXECUTE
+Baseline at block open: commit `d2529df` (docs-only PLAN commit, one above `ff6e991`) · backstop 203 OK / 0 FAIL · MAXIMAL `366e19d9`
+Plan-write progress (Session 1): [x] 71 · [x] 72 · [x] 73 · [x] 74 · [x] 75 · [x] ledger opened · [x] findings (10) — PLAN session complete
+Execute-session baseline (this session, before any code): `git log -1` = `d2529df`, tree clean → `npm run build` (generator) no src drift → `npm run day20:regress` = **203 OK / 0 FAIL**, MAXIMAL `366e19d9` UNMOVED, anchor `Spring Boot|PostgreSQL|TeamTracker 9e01210c55a5` reproduced by the engine.
 
 > **Authority (Rule from the spec):** THE CODE > the daily reports > the governing docs >
 > the Knowledge Book > **this ledger**. On any conflict, the ledger is wrong — correct it,
@@ -9,21 +10,31 @@ Plan-write progress (this session): [x] 71 · [x] 72 · [x] 73 · [x] 74 · [x] 
 > reports remain the certified record.
 
 ## STATUS
-Current day: 71 (planning only — no execute task started)
-Current task: A71-1 — NOT-STARTED
-Next task: A71-1
-Backstop last run: 2026-07-10 (this PLAN session, read-only) → **203 OK / 0 FAIL** (103 digests asserted; MAXIMAL `366e19d9` unmoved; PASS)
+Current day: 71 → CLOSED. Next day: 72.
+Current task: A71-5 — DONE (day close). All of Day 71 DONE (A71-3 live wiring PENDING-Leela).
+Next task: A72-1
+Backstop last run (A71-5 close): 2026-07-10 → **203 OK / 0 FAIL**; MAXIMAL `366e19d9deda1caf` UNMOVED; 103 digests asserted. `git diff --stat generator/` empty.
+Day-71 commit: (pending this session's day-close commit)
+Harness committed-baseline (the reusable Days 71–73 gate, `npm run ui-cli`): TeamTracker `9e01210c55a5…`(63f, ANCHOR/frozen) · blank `f95bc87d504d…`(15f) · restApi `6f6e543a2aff…`(15f) · crud `54b0852cb532…`(15f) · worker `fbc6c6e9aad2…`(15f). Five distinct. PASS at d2529df+shell.
+Backstop last run: 2026-07-10 (EXECUTE, after generator build from clean d2529df) → **203 OK / 0 FAIL** (103 digests asserted; MAXIMAL `366e19d9` unmoved; PASS)
 Frozen 103: UNMOVED
 MAXIMAL 366e19d9: UNMOVED
+
+## A71-1 PRE-WORK (mandatory before a line of harness code — prompt §4)
+- **Engine the harness imports: `generator/dist/…` (the certified engine BUILD), not `desktop/src-tauri/resources/gen/dist/…`.** Why: the anchor digest `9e01210c55a5` is asserted daily by `generator`'s own backstop (`node dist/day20-regression.js`) against `generator/dist/`. For the anchor to be a real tie to "a baseline proven byte-identical daily since Day 29," the harness must import the SAME engine build the backstop certifies — that is `generator/dist/`. This proves THE ENGINE BUILD + the shell serializer's semantics. `resources/gen/dist/` is the SIDECAR PAYLOAD (a copy), is gitignored, may be absent in this shell (A75-2's PENDING condition), and proves a DIFFERENT claim (packaged==certified) — that stays A75-2's job. A harness importing resources/gen could not run reliably from a clean tree.
+- **Digest algorithm (identical to `hashFiles` in `generator/src/day20-regression.ts` + `generator/CLAUDE.md`):** `sha256`, streaming. Files sorted ascending by `relPath` using default code-unit `<` comparison (NO `localeCompare`). For each file: `update('/' + relPath + '\n')` (UTF-8), then `update(Buffer.from(content,'utf8'))`. Hex digest. Do NOT fork this convention.
+- **File-set normalization:** the harness hashes the ENGINE's IN-MEMORY `GeneratedFile[]` from `buildFileSet` — it NEVER reads the filesystem. `relPath` is already forward-slashed at the plugin (`.split(path.sep).join('/')`); line endings are LF-only (LD-1 at template read; LD-2 guards no CR emitted). Because the harness hashes the same in-memory output the backstop hashes, there is NO Windows CRLF / path-separator false-red surface (the born-on-Windows false red the prompt warns about) — no disk round-trip exists.
 
 ## TASK TABLE
 | ID | Day | Task | State | Gate that proved it | Gate result | Files touched |
 |----|-----|------|-------|---------------------|-------------|---------------|
-| A71-1 | 71 | Build & commit the re-runnable UI==CLI byte-identity harness (real wizard-choices.js + real engine; deep-equal choices + byte-identical buildFileSet for blank/restApi/crud/worker/TeamTracker) | NOT-STARTED | harness reproduces recorded Day-61/62 digests | not yet run | desktop/tools/ui-cli-proof.mjs (new); desktop/package.json |
-| A71-2 | 71 | Shell-side screen router (pure UI state; no serializer edit) | NOT-STARTED | UI==CLI harness digests unchanged | not yet run | main.js, index.html, styles.css |
-| A71-3 | 71 | Screen 0 Welcome + two buttons (Create / Open existing = LIVE saved-blueprint list) | NOT-STARTED | PENDING (Leela) live | PENDING | main.js, index.html |
-| A71-4 | 71 | Wizard steps rendered full-window; semantics untouched | NOT-STARTED | UI==CLI harness digests unchanged | not yet run | main.js, index.html, styles.css |
-| A71-5 | 71 | ✦ DAY-71 CLOSE — engine-untouched confirm | NOT-STARTED | backstop 203/0; MAXIMAL unmoved | not yet run | (none) |
+| A71-1a | 71 | ANCHOR leg: harness TeamTracker (shell TEAMTRACKER_EXAMPLE → buildBlueprintChoices → engine) vs frozen `Spring Boot\|PostgreSQL\|TeamTracker` `9e01210c55a5` (inside the backstop's 103, proven daily since Day 29) | **DONE** | `node desktop/tools/ui-cli-proof.mjs` | **ANCHOR OK** — 63/63 files, digest `9e01210c55a5a0a6…5e45d66` == frozen exactly; choices deep-equal OK | desktop/tools/ui-cli-proof.mjs (new) |
+| A71-1b | 71 | FREE legs: blank/restApi/crud/worker (TEMPLATES presets) vs the 4 transcribed report digests (f95bc87d504d/6f6e543a2aff/54b0852cb532/fbc6c6e9aad2, 15f each) | **DONE** | `node desktop/tools/ui-cli-proof.mjs` | **4/4 MATCH** the transcribed prefixes (15/15 files each; choices deep-equal OK). First mechanical reproduction (F3). NO re-baseline — full 64-char digests recorded as committed baseline (see FINDINGS) | desktop/tools/ui-cli-proof.mjs (new) |
+| A71-1c | 71 | Commit the harness: deep-equal on buildBlueprintChoices + byte-identity on buildFileSet, all five templates; single command prints five DISTINCT digests | **DONE** | `npm run ui-cli` (desktop/) | **PASS** — five distinct full-64-char digests, all exact; choices deep-equal OK all five; exits non-zero on any mismatch. `.gitignore` trap checked: `git check-ignore desktop/tools/ui-cli-proof.mjs` empty (NOT ignored); `git status` shows the file. `git diff --stat generator/` empty | desktop/tools/ui-cli-proof.mjs (new); desktop/package.json (ui-cli script) |
+| A71-2 | 71 | Shell-side screen router (pure UI state; no serializer edit) | **DONE** | harness unchanged + `git diff --stat generator/` empty; live preview | **PASS** — harness 5/5 distinct unchanged; generator diff empty; wizard-choices.js diff empty. Live preview (static server): Welcome↔Wizard↔Workspace switch, one screen at a time, nav appears off-Welcome, results pane hidden on Welcome, 0 console errors | index.html (inline styles), main.js |
+| A71-3 | 71 | Screen 0 Welcome + two buttons (Create / Open existing = LIVE saved-blueprint list) | **DONE (code) / PENDING-Leela (live)** | harness proves no serializer touch; live list = PENDING (Leela) | Welcome renders name + lede + 2 buttons. Create→wizard (verified). Open existing→`openExisting()` reveals list via `list_blueprints`; in a plain browser shows the correct no-Tauri fallback. The LIVE list (real saved blueprints) needs Tauri → **PENDING (Leela)**, not fabricated. Label = "Open a saved project" (not open-from-folder). | index.html (inline styles), main.js |
+| A71-4 | 71 | Wizard steps rendered full-window; semantics untouched | **DONE** | harness unchanged + `git diff` wizard-choices.js empty + live preview | **PASS** — wizard screen full-window (single centered 680px column, steps then output); step click-through verified (Step 1→2…→Review 8/8; review renders correct BlueprintChoices JSON); harness 5/5 distinct unchanged; wizard-choices.js diff empty; generator diff empty; 0 console errors | index.html (inline styles) |
+| A71-5 | 71 | ✦ DAY-71 CLOSE — engine-untouched confirm | **DONE** | backstop 203/0; MAXIMAL unmoved; git scope | **PASS** — `npm run day20:regress` = 203 OK / 0 FAIL; MAXIMAL `366e19d9deda1caf` unmoved; 103 digests; `git diff --stat generator/` empty; scope = shell + tools + docs only | (none) |
 | A72-1 | 72 | Review→Create→workspace; Create = save_blueprint only; ABSTRACT project handle | NOT-STARTED | PENDING (Leela) live | PENDING | main.js, index.html |
 | A72-2 | 72 | Workspace screen (diagram + verbs; Advanced corner); each verb → an existing certified command | NOT-STARTED | PENDING (Leela) live | PENDING | main.js, index.html, styles.css |
 | A72-3 | 72 | ✦ DAY-72 CLOSE — engine + serializer untouched | NOT-STARTED | backstop 203/0 AND harness digests unchanged | not yet run | (none) |
@@ -39,9 +50,18 @@ MAXIMAL 366e19d9: UNMOVED
 **Day-boundary resume points** (natural cold-restart seams): A71-5→A72-1 · A72-3→A73-1 · A73-2→A74-1 · A74-1→A75-1.
 
 ## IN-PROGRESS DETAIL (only while a task is open)
-(none — PLAN session; no execute task open.)
+**(none — Day 71 CLOSED at the A71-5→A72-1 day-boundary seam. Next task A72-1 not yet started.)**
+
+**(archived) A71-1a — anchor leg.**
+- What is being built: `desktop/tools/ui-cli-proof.mjs` — imports the REAL `../src/wizard-choices.js` (buildBlueprintChoices, TEMPLATES, TEAMTRACKER_EXAMPLE) + the REAL engine from `../../generator/dist/` (assembleBlueprint, buildFileSet, selectBackendPlugin). Reimplements the `hashFiles` convention verbatim.
+- Anchor: feed `{ ...TEAMTRACKER_EXAMPLE.settings, entities: TEAMTRACKER_EXAMPLE.entities }` → buildBlueprintChoices → assembleBlueprint → buildFileSet(model, selectBackendPlugin(model)). Backend rides `settings.backend` = 'Spring Boot', database PostgreSQL. Assert digest === `9e01210c55a5a0a6d5c43cfa7e282a0b47f5f47f8780bbe48a733b3fe5e45d66` (FROZEN['Spring Boot|PostgreSQL|TeamTracker'], the anchor).
+- Not yet done: the harness file is not written; nothing run.
+- Gate before DONE: run the harness; the TeamTracker (Spring Boot|PostgreSQL) digest must equal the frozen `9e01210c55a5…` (63 files). RED → STOP + escalate to Leela, commit nothing.
+- If resuming cold, read first: this ledger; `desktop/src/wizard-choices.js`; `generator/src/day20-regression.ts` (FROZEN table L59-80 + hashFiles L206-210); `generator/src/teamtracker-model.ts`.
 
 ## FINDINGS (append-only — never delete a finding)
+- 2026-07-10 · **F11 (new) — `desktop/src/styles.css` is UNUSED Tauri scaffold; the real styling is INLINE in `index.html`.** Observed: the Block-A plan lists `styles.css` among Day-71's files-to-touch, but `index.html` has NO `<link rel="stylesheet">` — it carries its own inline `<style>` and loads only `main.js`. `styles.css` still holds the create-tauri-app defaults (`.logo`, `.container`, `#greet-input`). The repo wins (Move 2): the router/Welcome/full-window work lives in `index.html`'s inline styles + `main.js`; `styles.css` is left untouched. Proposed (not applied): a later cleanup may delete `styles.css` if truly dead, but that is out of Block-A scope and needs its own check that nothing loads it.
+- 2026-07-10 · **A71-1b — the four free-leg digests mechanically reproduced for the FIRST time (F3 closed).** Observed: the ad-hoc UI==CLI harness of Days 61/62 was never committed; the "Day-62 baselines" were 12-char prefixes transcribed into reports. A71-1's rebuilt harness (`desktop/tools/ui-cli-proof.mjs`, importing `generator/dist`) reproduces all four transcribed prefixes EXACTLY on first run: `blank f95bc87d504d`, `restApi 6f6e543a2aff`, `crud 54b0852cb532`, `worker fbc6c6e9aad2` (15 files each). This is NOT a re-baseline (Rule 1): no hash moved; the transcribed prefixes reproduced byte-for-byte. The full 64-char digests, mechanically reproduced and now baked into the harness as the durable committed baseline: `blank f95bc87d504d31054e5a130e3b64f0e1be79f8b15053ed5aa7c2261f537c393e`; `restApi 6f6e543a2affaa23659c1866068a0f629ae52ea4081e6b65d752abdf5fba4358`; `crud 54b0852cb532487bae7eda572866f5f2a84de3bc60a613d4dae7a8e3e86be9fa`; `worker fbc6c6e9aad2b7f6b9ec5df59d03f235979797f003284e6a8c09df65e9828797`. The anchor (TeamTracker → frozen `9e01210c55a5…5e45d66`, in the backstop's 103) is GREEN, so the free legs are trustworthy. NOT DONE: no re-baseline was performed because none was needed (no mismatch).
 - 2026-07-10 · The UI==CLI proof harness is NOT committed / the "Day-62 baselines" are not files. Observed: only `desktop/src/main.js` imports `wizard-choices.js`; the Day-61 and Day-62 commits added ONLY `desktop/src/{index.html,main.js,wizard-choices.js}`. Expected (per this block's brief): a runnable "serializer output byte-identical to the Day-62 baselines" gate. NOT DONE NEXT: did not fabricate the gate — flagged it as execute-task A71-1 (rebuild + commit the harness, first-run must reproduce the report-recorded digests or STOP). See eco-day-71-plan.md FINDINGS F3.
 - 2026-07-10 · The pure headless harness proves SERIALIZER SEMANTICS, not DOM/router wiring. Observed: `buildBlueprintChoices` is fed hand-built template `sel` objects; it never touches the router or the step DOM. Expected (implied by the brief): "UI==CLI byte-identity catches a broken wizard." Reconciliation: TRUE for meaning (edits to wizard-choices.js), NOT for wiring (does the regrouped screen write the right keys / does Create reach the workspace) — that stays PENDING (Leela). No proxy invented. See FINDINGS F4.
 - 2026-07-10 · Governing-doc path drift: the block prompt / Forward Plan / ledger-spec header reference `docs/prompts/…`, `docs/THRAKSHA-KNOWLEDGE-BOOK.md`, `docs/THRAKSHA-FORWARD-PLAN.md`; the files actually live in `docs/files/` (prompts, KB, Forward Plan, Phase-B handoff) and `docs/` root (this ledger spec; the control track). No `docs/prompts/` dir exists. The repo wins. See FINDINGS F1. (Not resolved by silent harmonisation — proposed one-line corrections listed in the plan.)

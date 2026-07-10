@@ -242,8 +242,27 @@ async function loadProject(id) {
     Object.assign(selections, choicesToSelections(choices));
     setBaseline(choices, `#${id} (loaded)`); // the loaded blueprint is the impact "current"
     stepIndex = REVIEW_STEP; renderStep();
+    showScreen('wizard'); // the loaded project opens in the wizard at review (Eco-Day 71 routing)
     setStatus(`Loaded "${selections.projectName}" (#${id}). Edit it, then Preview impact to see exactly what changes.`);
   } catch (err) { setEnvError('load: storage error', "Couldn't load that project", 'A local-store (SQLite) error occurred while loading. The technical detail is below.', err); }
+}
+
+// ─── Welcome → "Open a saved project" (Eco-Day 71) — the LIVE saved-blueprint list ─────────
+// A thin client over the Day-63 store (list_blueprints → load_blueprint, both certified and
+// already called from the workspace). "Open a saved project" = open a STORED blueprint, NOT
+// open-from-folder (that is a later build day). Each item loads its blueprint into the wizard.
+async function openExisting() {
+  const invoke = tauriInvoke();
+  const list = document.getElementById('welcome-projects');
+  if (!list) return;
+  list.hidden = false;
+  if (!invoke) { list.innerHTML = '<span class="empty">(open inside Bedrock to see saved projects)</span>'; return; }
+  try {
+    const rows = await invoke('list_blueprints');
+    list.textContent = '';
+    if (!rows.length) { list.innerHTML = '<span class="empty">(no saved projects yet — Create a new project to get started)</span>'; return; }
+    for (const r of rows) list.append(h('button', { class: 'ghost project-item', onclick: () => loadProject(r.id) }, `${r.name} · #${r.id} · ${r.created_at}`));
+  } catch (err) { list.innerHTML = `<span class="empty">list error: ${escapeHtml(String(err))}</span>`; }
 }
 
 // ─── the linked project view (Eco-Day 64) — maps + impact on the user's OWN blueprint ──────
@@ -542,6 +561,21 @@ async function runCommand(btn) {
 
 function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
+// ─── the screen router (Eco-Day 71) ─────────────────────────────────────────────────────────
+// PURE UI STATE: which one screen is visible. No generation logic, no serializer touch, no data
+// derivation — showScreen just sets a data attribute the CSS drives, so every existing DOM region
+// keeps its id + handlers. The app opens on Welcome; the top nav appears once you leave it.
+const SCREENS = new Set(['welcome', 'wizard', 'workspace']);
+function showScreen(name) {
+  const app = document.getElementById('app');
+  if (!app || !SCREENS.has(name)) return;
+  app.dataset.screen = name;
+  const nav = document.getElementById('topnav');
+  if (nav) nav.hidden = name === 'welcome';
+}
+// Enter the wizard from the start (Create a new project). Semantics untouched — this only routes.
+function startWizard() { stepIndex = 0; renderStep(); showScreen('wizard'); }
+
 // ─── init ────────────────────────────────────────────────────────────────────────────────
 function init() {
   const tpl = document.getElementById('templates');
@@ -563,6 +597,13 @@ function init() {
   document.getElementById('compare-refresh').addEventListener('click', refreshCompareSelects);
   refreshCompareSelects();
   for (const btn of document.querySelectorAll('button[data-cmd]')) btn.addEventListener('click', () => runCommand(btn));
+  // ── the router wiring (Eco-Day 71) — pure navigation over the existing screens ──
+  document.getElementById('brand-home').addEventListener('click', () => showScreen('welcome'));
+  document.getElementById('nav-new').addEventListener('click', startWizard);
+  document.getElementById('nav-workspace').addEventListener('click', () => showScreen('workspace'));
+  document.getElementById('welcome-create').addEventListener('click', startWizard);
+  document.getElementById('welcome-open').addEventListener('click', openExisting);
+  showScreen('welcome'); // the app opens on Welcome — one screen at a time
   if (!tauriInvoke()) setStatus('note: Tauri backend not detected (open inside Bedrock to generate). The wizard + the assembled BlueprintChoices still work.');
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
