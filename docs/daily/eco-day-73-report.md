@@ -92,9 +92,12 @@ $ git status --porcelain
 
 ## 3. Proven vs PENDING (honesty)
 
-- **PROVEN:** the serializer meaning is byte-identical across the regroup (harness 5/5, incl. the
-  frozen-anchored TeamTracker); the field↔key wiring is unit-tested AND demonstrated live in a plain
-  browser; engine + serializer functions untouched (STEPS-only diff; backstop 203/0).
+- **PROVEN (reproducible commands):** the serializer meaning is byte-identical across the regroup
+  (harness 5/5, incl. the frozen-anchored TeamTracker); the field↔key wiring is **unit-tested**
+  (`npm run test:stack`); engine + serializer functions untouched (STEPS-only diff; backstop 203/0).
+- **INSPECTED, not proven:** the Stack screen writing the right keys was **inspected in a plain browser
+  without Tauri** (unreproducible — no committed test); the full in-Bedrock check is PENDING (Leela).
+  [downgraded Day 75b, F12-A]
 - **PENDING — Leela's machine:** the full in-Bedrock wizard click-through (with the store +
   generation round-trips) end-to-end on the new 5-step flow. The specific F4/F5 concern
   (four-selects-write-the-right-keys) is now covered by the unit test + the plain-browser demo, but

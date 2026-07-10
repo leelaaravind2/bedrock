@@ -172,7 +172,8 @@ $ git status --porcelain
 - **Block A′.1 — pre-71 control smoke** (8 Half-B items, current shell) — the control. PENDING.
 - A71 live: app opens on Welcome only; every certified flow reachable — PENDING.
 - A71 live: Welcome shows two buttons; *Open a saved project* lists saved blueprints and loads one;
-  *Create* enters the wizard — PENDING (verified in a plain browser only; real store needs Tauri).
+  *Create* enters the wizard — PENDING (Leela). Inspected in a plain browser without Tauri
+  (unreproducible — no committed test); the real store needs Tauri. [downgraded Day 75b, F12-A]
 - A71 live: full-window wizard click-through end-to-end inside Bedrock — PENDING.
 
 ---

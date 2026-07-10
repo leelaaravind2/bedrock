@@ -98,7 +98,8 @@ for every live check below. **PENDING** (no written result on disk).
 **Day 71 live wiring:**
 - App opens on Welcome only; every certified flow reachable. **PENDING.**
 - Welcome's two buttons; *Open a saved project* lists saved blueprints and loads one; *Create* enters the
-  wizard. **PENDING** (verified only in a plain browser without Tauri).
+  wizard. **PENDING (Leela)** — inspected only in a plain browser without Tauri (unreproducible; no
+  committed test). [downgraded Day 75b, F12-A]
 - Full-window wizard click-through end-to-end inside Bedrock. **PENDING.**
 
 **Day 72 live wiring:**
