@@ -8,7 +8,8 @@
     "sync-gen": "node ../scripts/sync-generator-resources.mjs",
     "sync-gen:check": "node ../scripts/sync-generator-resources.mjs --check",
     "ui-cli": "node tools/ui-cli-proof.mjs",
-    "test:stack": "node tools/stack-fields.test.mjs"
+    "test:stack": "node tools/stack-fields.test.mjs",
+    "test:router": "node tools/router.test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

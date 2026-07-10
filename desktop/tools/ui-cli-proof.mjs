@@ -13,8 +13,9 @@
 // "packaged==certified" claim). The anchor digest below is asserted DAILY by generator's own
 // backstop against generator/dist, so importing the same build makes the anchor a real tie.
 //
-// DIGEST CONVENTION: verbatim from generator/src/day20-regression.ts `hashFiles` +
-// generator/CLAUDE.md — sha256 over files sorted ascending by relPath (code-unit `<`, NO
+// DIGEST CONVENTION: IMPORTED from the engine's ONE canonical `hashFiles`
+// (generator/dist/core/file-digest.js, Eco-Day 75c) + generator/CLAUDE.md — sha256 over files
+// sorted ascending by relPath (code-unit `<`, NO
 // localeCompare), each contributing `/${relPath}\n` (UTF-8) then the content Buffer. The
 // harness hashes the engine's IN-MEMORY GeneratedFile[] (never the filesystem), so there is
 // NO Windows CRLF / path-separator false-red surface. Do NOT fork this convention.
@@ -22,23 +23,17 @@
 // Run:  npm run ui-cli   (from desktop/)   — exits non-zero on ANY mismatch.
 // Prereq: the engine must be built first — `cd generator && npm run build` (dist is gitignored).
 
-import crypto from 'node:crypto';
 import {
   buildBlueprintChoices, TEMPLATES, TEAMTRACKER_EXAMPLE,
 } from '../src/wizard-choices.js';
 import { assembleBlueprint } from '../../generator/dist/core/assemble.js';
 import { buildFileSet } from '../../generator/dist/core/regen.js';
 import { selectBackendPlugin } from '../../generator/dist/plugins/registry.js';
+import { hashFiles } from '../../generator/dist/core/file-digest.js';
 
-// ── the digest (identical to generator/src/day20-regression.ts hashFiles) ──────────────────
-function hashFiles(files) {
-  const h = crypto.createHash('sha256');
-  for (const f of [...files].sort((a, b) => (a.relPath < b.relPath ? -1 : 1))) {
-    h.update(`/${f.relPath}\n`);
-    h.update(Buffer.from(f.content, 'utf8'));
-  }
-  return h.digest('hex');
-}
+// ── the digest: the ONE canonical `hashFiles`, imported from the certified engine build above
+//    (Eco-Day 75c Task 1). This was a private copy; the convention is now defined once, so this
+//    harness and the backstop cannot silently drift. ───────────────────────────────────────
 async function filesOf(choices) {
   const model = assembleBlueprint(choices);
   return buildFileSet(model, selectBackendPlugin(model));

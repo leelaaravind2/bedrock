@@ -16,6 +16,7 @@ import {
   newEntity, newField, newRelationship, TEAMTRACKER_EXAMPLE,
 } from './wizard-choices.js';
 import { STACK_FIELDS, applyStackFields } from './stack-fields.js';
+import { screenState, workspaceState } from './router.js';
 
 function tauriInvoke() {
   const t = window.__TAURI__;
@@ -296,10 +297,10 @@ function renderWorkspace() {
   const body = document.getElementById('workspace-body');
   const empty = document.getElementById('workspace-empty');
   if (!nameEl) return;
-  const has = !!currentProject;
-  if (body) body.hidden = !has;         // the verbs + Advanced corner exist ONLY once a project does
-  if (empty) empty.hidden = has;
-  if (!has) return;
+  const ws = workspaceState(currentProject); // pure (router.js): null project → empty state
+  if (body) body.hidden = !ws.showBody;   // the verbs + Advanced corner exist ONLY once a project does
+  if (empty) empty.hidden = !ws.showEmpty;
+  if (!ws.hasProject) return;
   nameEl.textContent = currentProject.name;
   const s = currentProject.choices.settings || {};
   const n = currentProject.choices.entities ? currentProject.choices.entities.length : 0;
@@ -617,17 +618,19 @@ async function runCommand(btn) {
 
 function escapeHtml(s) { return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
 
-// ─── the screen router (Eco-Day 71) ─────────────────────────────────────────────────────────
-// PURE UI STATE: which one screen is visible. No generation logic, no serializer touch, no data
-// derivation — showScreen just sets a data attribute the CSS drives, so every existing DOM region
-// keeps its id + handlers. The app opens on Welcome; the top nav appears once you leave it.
-const SCREENS = new Set(['welcome', 'wizard', 'workspace']);
+// ─── the screen router (Eco-Day 71; pure state extracted to router.js Eco-Day 75c) ──────────
+// PURE UI STATE lives in router.js (screenState); showScreen just PAINTS its decision — it sets
+// the `data-screen` attribute the CSS drives, so every existing DOM region keeps its id +
+// handlers. No generation logic, no serializer touch. The app opens on Welcome; the top nav
+// appears once you leave it.
 function showScreen(name) {
+  const state = screenState(name);
+  if (!state) return; // unknown target → no transition (the current single screen stays)
   const app = document.getElementById('app');
-  if (!app || !SCREENS.has(name)) return;
-  app.dataset.screen = name;
+  if (!app) return;
+  app.dataset.screen = state.screen;
   const nav = document.getElementById('topnav');
-  if (nav) nav.hidden = name === 'welcome';
+  if (nav) nav.hidden = state.navHidden;
 }
 // Enter the wizard from the start (Create a new project). Semantics untouched — this only routes.
 function startWizard() { stepIndex = 0; renderStep(); showScreen('wizard'); }

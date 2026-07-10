@@ -23,7 +23,6 @@
  * Run:  node dist/day20-regression.js
  */
 
-import crypto from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +30,7 @@ import { buildDemoAppModel } from './demoapp-model.js';
 import { buildTeamTrackerModel } from './teamtracker-model.js';
 import { buildTaskModel } from './task-model.js';
 import { buildFileSet, applyPlan } from './core/regen.js';
+import { hashFiles } from './core/file-digest.js';
 import { previewImpact, diffFileSets, fileHash, type ImpactAction } from './map/impact-map.js';
 import { buildFlowMap, type FlowNode } from './map/flow-map.js';
 import { renderFlowSvg } from './map/flow-svg.js';
@@ -203,11 +203,6 @@ const VERSION_BASELINES: [string, Partial<StackVersions>, string][] = [
 const BACKENDS = ['Spring Boot', 'Express', 'FastAPI', 'Django', 'Go'];
 const DATABASES = ['PostgreSQL', 'MySQL'];
 
-function hashFiles(files: GeneratedFile[]): string {
-  const h = crypto.createHash('sha256');
-  for (const f of [...files].sort((a, b) => (a.relPath < b.relPath ? -1 : 1))) { h.update(`/${f.relPath}\n`); h.update(Buffer.from(f.content, 'utf8')); }
-  return h.digest('hex');
-}
 async function filesOf(model: ProjectModel): Promise<GeneratedFile[]> { return buildFileSet(model, selectBackendPlugin(model)); }
 async function hashOf(model: ProjectModel): Promise<string> { return hashFiles(await filesOf(model)); }
 function styleOf(indent: string, naming: string, depth: string): CodingStyle {
