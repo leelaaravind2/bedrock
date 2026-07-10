@@ -10,11 +10,13 @@ Execute-session baseline (this session, before any code): `git log -1` = `d2529d
 > reports remain the certified record.
 
 ## STATUS
-Current day: 71 → CLOSED. Next day: 72.
-Current task: A71-5 — DONE (day close). All of Day 71 DONE (A71-3 live wiring PENDING-Leela).
-Next task: A72-1
+Current day: 72 → CLOSED. Next day: 73.
+Current task: A72-3 — DONE (day close). All of Day 72 DONE (live round-trips PENDING-Leela).
+Next task: A73-1
+Backstop last run (A72-3 close): 2026-07-10 → **203 OK / 0 FAIL**; MAXIMAL `366e19d9deda1caf` UNMOVED. `git diff --stat generator/` empty. Harness 5/5 distinct unchanged.
+Day-72 commit: (pending this session's day-close commit)
 Backstop last run (A71-5 close): 2026-07-10 → **203 OK / 0 FAIL**; MAXIMAL `366e19d9deda1caf` UNMOVED; 103 digests asserted. `git diff --stat generator/` empty.
-Day-71 commit: (pending this session's day-close commit)
+Day-71 commit: `ba258f9` — "eco-day-71: screen router + Welcome + full-window wizard + committed UI==CLI harness (backstop green, 203 OK / 0 FAIL)". Pre-commit backstop ran GREEN. Not pushed (Leela pushes).
 Harness committed-baseline (the reusable Days 71–73 gate, `npm run ui-cli`): TeamTracker `9e01210c55a5…`(63f, ANCHOR/frozen) · blank `f95bc87d504d…`(15f) · restApi `6f6e543a2aff…`(15f) · crud `54b0852cb532…`(15f) · worker `fbc6c6e9aad2…`(15f). Five distinct. PASS at d2529df+shell.
 Backstop last run: 2026-07-10 (EXECUTE, after generator build from clean d2529df) → **203 OK / 0 FAIL** (103 digests asserted; MAXIMAL `366e19d9` unmoved; PASS)
 Frozen 103: UNMOVED
@@ -35,9 +37,9 @@ MAXIMAL 366e19d9: UNMOVED
 | A71-3 | 71 | Screen 0 Welcome + two buttons (Create / Open existing = LIVE saved-blueprint list) | **DONE (code) / PENDING-Leela (live)** | harness proves no serializer touch; live list = PENDING (Leela) | Welcome renders name + lede + 2 buttons. Create→wizard (verified). Open existing→`openExisting()` reveals list via `list_blueprints`; in a plain browser shows the correct no-Tauri fallback. The LIVE list (real saved blueprints) needs Tauri → **PENDING (Leela)**, not fabricated. Label = "Open a saved project" (not open-from-folder). | index.html (inline styles), main.js |
 | A71-4 | 71 | Wizard steps rendered full-window; semantics untouched | **DONE** | harness unchanged + `git diff` wizard-choices.js empty + live preview | **PASS** — wizard screen full-window (single centered 680px column, steps then output); step click-through verified (Step 1→2…→Review 8/8; review renders correct BlueprintChoices JSON); harness 5/5 distinct unchanged; wizard-choices.js diff empty; generator diff empty; 0 console errors | index.html (inline styles) |
 | A71-5 | 71 | ✦ DAY-71 CLOSE — engine-untouched confirm | **DONE** | backstop 203/0; MAXIMAL unmoved; git scope | **PASS** — `npm run day20:regress` = 203 OK / 0 FAIL; MAXIMAL `366e19d9deda1caf` unmoved; 103 digests; `git diff --stat generator/` empty; scope = shell + tools + docs only | (none) |
-| A72-1 | 72 | Review→Create→workspace; Create = save_blueprint only; ABSTRACT project handle | NOT-STARTED | PENDING (Leela) live | PENDING | main.js, index.html |
-| A72-2 | 72 | Workspace screen (diagram + verbs; Advanced corner); each verb → an existing certified command | NOT-STARTED | PENDING (Leela) live | PENDING | main.js, index.html, styles.css |
-| A72-3 | 72 | ✦ DAY-72 CLOSE — engine + serializer untouched | NOT-STARTED | backstop 203/0 AND harness digests unchanged | not yet run | (none) |
+| A72-1 | 72 | Review→Create→workspace; Create = save_blueprint only; ABSTRACT project handle | **DONE (code) / PENDING-Leela (live path)** | harness unchanged; live Welcome→…→Create→workspace = PENDING (Leela) | Wizard end changed Review→"Create project" (Next label + button) → `saveProject` (`save_blueprint` ONLY) → `openWorkspace()`. Load routes to workspace too. **Abstract handle:** `currentProject = { name, choices, storeId? }` — the workspace reads this object, NEVER a bare row id; `storeId` is optional so a Day-78 file-backed project (no row) fits the same shape. The dead `generate()` (old direct export) removed; export is now a workspace verb. Verified in a plain browser: routing + empty state; the SAVE round-trip needs Tauri → PENDING | main.js, index.html |
+| A72-2 | 72 | Workspace screen (diagram + verbs; Advanced corner); each verb → an existing certified command | **DONE (code) / PENDING-Leela (verbs)** | harness unchanged; each verb round-trips = PENDING (Leela) | Workspace rebuilt: empty state (no project) + `workspace-body` (project header + verb bar). Verbs → EXISTING commands: Edit→re-enter wizard; Preview impact→`impact_preview`+`impact_nodes`; Verify→`impact_nodes`(self-pair); Export→`export_project`; Save version→`save_blueprint`; diagram front-and-centre→`flow_svg` (auto-drawn on entry). **Advanced corner** (raw harness + Compare + All-projects) nested INSIDE `workspace-body` → absent on Welcome AND without a project (verified via DOM: `advanced-corner.closest('#workspace-body')` true; empty state hides body). Zero new engine capability. Live verb round-trips need Tauri → PENDING | main.js, index.html |
+| A72-3 | 72 | ✦ DAY-72 CLOSE — engine + serializer untouched | **DONE** | backstop 203/0 AND harness digests unchanged AND git diff generator/ empty | **PASS** — 203 OK / 0 FAIL; MAXIMAL `366e19d9deda1caf` unmoved; harness 5/5 distinct unchanged; `git diff --stat generator/` empty; scope = shell + docs only | (none) |
 | A73-1 | 73 | Stack regroup: 4 settings steps → 1 screen, 4 fields; buildBlueprintChoices UNTOUCHED | NOT-STARTED | UI==CLI harness reproduces ALL digests incl. TeamTracker | not yet run | main.js, index.html, styles.css, wizard-choices.js (STEPS only) |
 | A73-2 | 73 | ✦ DAY-73 CLOSE — engine untouched | NOT-STARTED | backstop 203/0; MAXIMAL unmoved | not yet run | (none) |
 | A74-1 | 74 | Run `docs/files/BEDROCK-DOCS-DAY-PROMPT.md` exactly as written (docs-only; AFTER Day 72) | NOT-STARTED | backstop 203/0 AND git shows only docs | not yet run | docs/ only |

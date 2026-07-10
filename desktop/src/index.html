@@ -147,90 +147,104 @@
         </div>
       </section>
 
-      <!-- ── Screen 2: the workspace. Eco-Day 71 = a PLACEHOLDER banner + the existing certified
-           flows kept reachable (project view, my projects, compare, the Advanced harness). Eco-Day
-           72 rebuilds this into the diagram-centred workspace with verbs + an Advanced corner. ── -->
+      <!-- ── Screen 2: the workspace (Eco-Day 72). The project's home once it exists: the diagram
+           front and centre (in the results pane), a verb bar (each verb → an EXISTING certified
+           command), and an Advanced corner hosting the raw harness + compare + all-projects —
+           reachable ONLY here, never on Welcome. Zero new engine capability. ── -->
       <section class="screen workspace" id="screen-workspace">
-        <div class="card workspace-placeholder">
-          <h2>Your project workspace</h2>
-          <p class="hint">A placeholder for now. On the next build day this becomes your project's home — the diagram front and centre with Edit / Preview impact / Verify / Export / Save-versions. Today, every certified flow below stays reachable.</p>
-        </div>
-
-        <!-- Project view (Eco-Day 64): the maps run on YOUR blueprint. Preview an edit's exact impact. -->
-        <div class="card">
-          <h2>Project view — maps &amp; impact</h2>
-          <p class="hint" id="baseline-label">No saved baseline yet.</p>
+        <!-- empty state: no project open yet (the Advanced corner does not exist without a project) -->
+        <div class="card workspace-placeholder" id="workspace-empty">
+          <h2>No project open</h2>
+          <p class="hint">Create a new project or open a saved one — your project's workspace (its diagram, the verbs, and the advanced tools) appears here.</p>
           <div class="row-inline">
-            <button id="view-diagram">View diagram</button>
-            <button id="view-flow-map">Flow map (text)</button>
-            <button id="preview-impact">Preview impact of edits</button>
-            <button id="verify-determinism">Verify determinism</button>
+            <button id="ws-goto-create">Create a new project</button>
+            <button class="ghost" id="ws-goto-open">Open a saved project</button>
           </div>
-          <p class="hint">Verify generates your project <em>twice, independently</em>, and compares every file — proof that the same blueprint produces byte-identical code (reproducibility, not correctness or security).</p>
         </div>
 
-        <!-- My projects: the saved blueprints (SQLite store, Eco-Day 63) — load one back. -->
-        <div class="card">
-          <h2>My projects</h2>
-          <div id="projects-list" class="projects"><!-- injected --></div>
-          <button class="ghost" id="projects-refresh">Refresh</button>
+        <!-- the workspace proper (shown only once a project exists) -->
+        <div id="workspace-body" hidden>
+          <div class="card">
+            <h2 id="workspace-project-name">Project</h2>
+            <p class="hint" id="workspace-project-sub"></p>
+            <div class="row-inline">
+              <button id="ws-edit">Edit</button>
+              <button id="preview-impact">Preview impact</button>
+              <button id="verify-determinism">Verify</button>
+              <button id="ws-export">Export</button>
+              <button id="save-version">Save version</button>
+              <button class="ghost" id="view-diagram">Redraw diagram</button>
+              <button class="ghost" id="view-flow-map">Flow map (text)</button>
+            </div>
+            <label>Export to folder</label>
+            <input id="ws-export-dir" placeholder="C:\\path\\to\\output" />
+            <p class="hint" id="baseline-label">No saved baseline yet.</p>
+            <p class="hint">The diagram (right) is your project drawn by the certified engine. <em>Verify</em> generates it twice and compares every file — reproducibility, not correctness or security. <em>Preview impact</em> shows the exact file delta of your edits against the saved baseline.</p>
+          </div>
+
+          <!-- Advanced corner: the raw command harness + compare + all projects. Only inside a workspace. -->
+          <details class="advanced" id="advanced-corner">
+            <summary>Advanced — raw commands, compare &amp; all projects</summary>
+
+            <!-- Compare versions (Eco-Day 67): the diff Map — pick two SAVED blueprints, see the exact delta. -->
+            <div class="panel">
+              <h3>Compare versions</h3>
+              <label>A (from)</label>
+              <select id="compare-a"></select>
+              <label>B (to)</label>
+              <select id="compare-b"></select>
+              <div class="row-inline">
+                <button id="compare-run">Compare A → B</button>
+                <button class="ghost" id="compare-refresh">Refresh</button>
+              </div>
+              <p class="hint">B's diagram is drawn; the change from A into B is highlighted. Deleted entities (removed in B) appear in the text delta below, not the diagram.</p>
+            </div>
+
+            <!-- All saved projects (SQLite store, Eco-Day 63) — open one back into its workspace. -->
+            <div class="panel">
+              <h3>All saved projects</h3>
+              <div id="projects-list" class="projects"><!-- injected --></div>
+              <button class="ghost" id="projects-refresh">Refresh</button>
+            </div>
+
+            <div class="panel">
+              <h3>Detect toolchains</h3>
+              <button data-cmd="detect_toolchains">Run detect</button>
+            </div>
+            <div class="panel">
+              <h3>Flow map</h3>
+              <label>backend (optional — blank ⇒ demo)</label>
+              <input id="flow-backend" placeholder="Express" />
+              <label>model JSON / path (optional)</label>
+              <textarea id="flow-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
+              <button data-cmd="flow_map" data-backend="flow-backend" data-model="flow-model">Run flow map</button>
+            </div>
+            <div class="panel">
+              <h3>Impact preview</h3>
+              <label>backend (optional)</label>
+              <input id="impact-backend" placeholder="Express" />
+              <label>model JSON / path (optional — { current, proposed })</label>
+              <textarea id="impact-model" placeholder='{ "current": {…}, "proposed": {…} }'></textarea>
+              <button data-cmd="impact_preview" data-backend="impact-backend" data-model="impact-model">Run impact preview</button>
+            </div>
+            <div class="panel">
+              <h3>Scan (deterministic + advisory)</h3>
+              <label>project directory</label>
+              <input id="scan-dir" placeholder="C:\\path\\to\\project" />
+              <button data-cmd="scan_project" data-projectdir="scan-dir">Run scan</button>
+            </div>
+            <div class="panel">
+              <h3>Export (raw model)</h3>
+              <label>target directory</label>
+              <input id="export-dir" placeholder="C:\\path\\to\\output" />
+              <label>backend (optional)</label>
+              <input id="export-backend" placeholder="Express" />
+              <label>model JSON / path (optional)</label>
+              <textarea id="export-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
+              <button data-cmd="export_project" data-targetdir="export-dir" data-backend="export-backend" data-model="export-model">Run export</button>
+            </div>
+          </details>
         </div>
-
-        <!-- Compare versions (Eco-Day 67): the diff Map — pick two SAVED blueprints, see the exact delta. -->
-        <div class="card">
-          <h2>Compare versions</h2>
-          <label>A (from)</label>
-          <select id="compare-a"></select>
-          <label>B (to)</label>
-          <select id="compare-b"></select>
-          <div class="row-inline">
-            <button id="compare-run">Compare A → B</button>
-            <button class="ghost" id="compare-refresh">Refresh</button>
-          </div>
-          <p class="hint">B's diagram is drawn; the change from A into B is highlighted. Deleted entities (removed in B) appear in the text delta below, not the diagram — B has no node for a removed entity.</p>
-        </div>
-
-        <!-- Advanced: the raw command harness (scan / flow-map / impact / detect + raw --model). -->
-        <details class="advanced">
-          <summary>Advanced — raw commands</summary>
-
-          <div class="panel">
-            <h3>Detect toolchains</h3>
-            <button data-cmd="detect_toolchains">Run detect</button>
-          </div>
-          <div class="panel">
-            <h3>Flow map</h3>
-            <label>backend (optional — blank ⇒ demo)</label>
-            <input id="flow-backend" placeholder="Express" />
-            <label>model JSON / path (optional)</label>
-            <textarea id="flow-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
-            <button data-cmd="flow_map" data-backend="flow-backend" data-model="flow-model">Run flow map</button>
-          </div>
-          <div class="panel">
-            <h3>Impact preview</h3>
-            <label>backend (optional)</label>
-            <input id="impact-backend" placeholder="Express" />
-            <label>model JSON / path (optional — { current, proposed })</label>
-            <textarea id="impact-model" placeholder='{ "current": {…}, "proposed": {…} }'></textarea>
-            <button data-cmd="impact_preview" data-backend="impact-backend" data-model="impact-model">Run impact preview</button>
-          </div>
-          <div class="panel">
-            <h3>Scan (deterministic + advisory)</h3>
-            <label>project directory</label>
-            <input id="scan-dir" placeholder="C:\\path\\to\\project" />
-            <button data-cmd="scan_project" data-projectdir="scan-dir">Run scan</button>
-          </div>
-          <div class="panel">
-            <h3>Export (raw model)</h3>
-            <label>target directory</label>
-            <input id="export-dir" placeholder="C:\\path\\to\\output" />
-            <label>backend (optional)</label>
-            <input id="export-backend" placeholder="Express" />
-            <label>model JSON / path (optional)</label>
-            <textarea id="export-model" placeholder="BlueprintChoices JSON or a file path"></textarea>
-            <button data-cmd="export_project" data-targetdir="export-dir" data-backend="export-backend" data-model="export-model">Run export</button>
-          </div>
-        </details>
       </section>
 
       <!-- ── The shared engine-output pane. Visible alongside the wizard and workspace; hidden on

@@ -116,7 +116,7 @@ function renderStep() {
     progress.textContent = `Step ${DATA_STEP + 1} of ${TOTAL}: Data model`;
     renderDataModel();
   } else {
-    next.textContent = 'Generate ▸';
+    next.textContent = 'Create project ▸';
     progress.textContent = `Review — step ${TOTAL} of ${TOTAL}`;
     renderReview();
   }
@@ -200,9 +200,8 @@ function renderReview() {
     rows +
     `<div class="review-row"><span>entities</span><span>${nEnt}</span></div>` +
     `<pre class="choices" id="choices-json">${escapeHtml(JSON.stringify(choices, null, 2))}</pre>` +
-    `<button id="save-project">Save project</button> ` +
-    `<label>Export to folder</label><input id="target-dir" placeholder="C:\\path\\to\\output" />` +
-    `<p class="hint">Generation is deterministic — same choices, same code.${nEnt === 0 ? ' (Settings-only shell — add entities in the Data model step for a full app.)' : ''}</p>`;
+    `<button id="save-project">Create project</button>` +
+    `<p class="hint">Create saves your project and opens its workspace — where you export to a folder, verify, and preview the impact of edits. Generation is deterministic: same choices, same code.${nEnt === 0 ? ' (Settings-only shell — add entities in the Data model step for a full app.)' : ''}</p>`;
   document.getElementById('save-project').addEventListener('click', saveProject);
 }
 
@@ -217,8 +216,10 @@ async function saveProject() {
     setStatus(`Saved "${selections.projectName}" as #${id}.`);
     setOutput('clean', 'Saved', `Project "${selections.projectName}" persisted to your local store (id #${id}).`);
     setBaseline(choices, `#${id} (saved)`); // the just-saved blueprint becomes the impact "current"
+    currentProject = { name: selections.projectName, choices: JSON.parse(JSON.stringify(choices)), storeId: id };
     refreshProjects();
     refreshCompareSelects(); // a newly-saved project becomes available to compare
+    openWorkspace(); // Eco-Day 72: Create (= save_blueprint) lands you in the project's workspace
   } catch (err) { setEnvError('save: storage error', "Couldn't save your project", 'A local-store (SQLite) error occurred while saving. Your wizard input is intact. The technical detail is below.', err); }
 }
 async function refreshProjects() {
@@ -241,9 +242,9 @@ async function loadProject(id) {
     const choices = JSON.parse(json);
     Object.assign(selections, choicesToSelections(choices));
     setBaseline(choices, `#${id} (loaded)`); // the loaded blueprint is the impact "current"
-    stepIndex = REVIEW_STEP; renderStep();
-    showScreen('wizard'); // the loaded project opens in the wizard at review (Eco-Day 71 routing)
-    setStatus(`Loaded "${selections.projectName}" (#${id}). Edit it, then Preview impact to see exactly what changes.`);
+    currentProject = { name: selections.projectName, choices: JSON.parse(JSON.stringify(choices)), storeId: id };
+    openWorkspace(); // Eco-Day 72: a loaded project opens in its workspace (was: wizard review)
+    setStatus(`Opened "${selections.projectName}" (#${id}). Edit it, preview impact, verify, or export.`);
   } catch (err) { setEnvError('load: storage error', "Couldn't load that project", 'A local-store (SQLite) error occurred while loading. The technical detail is below.', err); }
 }
 
@@ -263,6 +264,54 @@ async function openExisting() {
     if (!rows.length) { list.innerHTML = '<span class="empty">(no saved projects yet — Create a new project to get started)</span>'; return; }
     for (const r of rows) list.append(h('button', { class: 'ghost project-item', onclick: () => loadProject(r.id) }, `${r.name} · #${r.id} · ${r.created_at}`));
   } catch (err) { list.innerHTML = `<span class="empty">list error: ${escapeHtml(String(err))}</span>`; }
+}
+
+// ─── the project workspace (Eco-Day 72) — the project's home after Create / Open ───────────
+// The workspace attaches to an ABSTRACT project handle `{ name, choices, storeId? }` — NEVER a
+// bare SQLite row id threaded through the UI. Day 78 makes a canonical FILE the truth and demotes
+// the store to an index; because the workspace reads `currentProject` (not a row id), that change
+// is a store swap, not a UI rewrite. Every verb calls an EXISTING certified command — the
+// workspace introduces ZERO new engine capability. `storeId` is optional metadata on the handle,
+// exactly so a future file-backed project (no row) still fits the same shape.
+let currentProject = null; // { name, choices, storeId? }
+
+function openWorkspace() { showScreen('workspace'); renderWorkspace(); }
+function renderWorkspace() {
+  const nameEl = document.getElementById('workspace-project-name');
+  const body = document.getElementById('workspace-body');
+  const empty = document.getElementById('workspace-empty');
+  if (!nameEl) return;
+  const has = !!currentProject;
+  if (body) body.hidden = !has;         // the verbs + Advanced corner exist ONLY once a project does
+  if (empty) empty.hidden = has;
+  if (!has) return;
+  nameEl.textContent = currentProject.name;
+  const s = currentProject.choices.settings || {};
+  const n = currentProject.choices.entities ? currentProject.choices.entities.length : 0;
+  const sub = document.getElementById('workspace-project-sub');
+  if (sub) sub.textContent = `${s.projectType} · ${s.backend} · ${s.database}`
+    + `${s.frontend && s.frontend !== 'None' ? ' · ' + s.frontend : ''}`
+    + ` · ${n} ${n === 1 ? 'entity' : 'entities'}${currentProject.storeId != null ? ' · saved #' + currentProject.storeId : ''}`;
+  viewDiagram(); // the diagram FRONT AND CENTRE — the certified flow-svg of this project (thin display)
+}
+// Verb: Edit — re-enter the wizard on this blueprint. `selections` already holds it (Create/Open
+// set it); re-hydrating from the handle is belt-and-braces so Edit is correct from any entry.
+function editCurrentProject() {
+  if (currentProject) Object.assign(selections, choicesToSelections(currentProject.choices));
+  stepIndex = 0; renderStep(); showScreen('wizard');
+  setStatus('Editing your project. Change any step, then review — Save version to keep it, or Preview impact to see the delta.');
+}
+// Verb: Export — export THIS project to a folder via the certified export_project command.
+async function exportCurrentProject() {
+  const invoke = tauriInvoke();
+  const dirEl = document.getElementById('ws-export-dir');
+  const targetDir = dirEl ? dirEl.value.trim() : '';
+  if (!targetDir) { setStatus('Export: enter a folder first.'); setOutput('info', 'Export — folder needed', 'Enter a target folder to export this project into, then Export.'); return; }
+  const choices = buildBlueprintChoices(selections);
+  if (!invoke) { setStatus('not running inside Bedrock'); setOutput('env-error', 'no Tauri backend', 'Open inside the Bedrock window to export.'); return; }
+  setStatus(`Exporting ${selections.projectName}…`);
+  try { renderResult('export_project', await invoke('export_project', { targetDir, model: JSON.stringify(choices) })); }
+  catch (err) { setEnvError('export: environment error', "Bedrock's generator couldn't start", 'An environment problem (the sidecar is missing or broke), not a problem with your project. The technical detail is below.', err); }
 }
 
 // ─── the linked project view (Eco-Day 64) — maps + impact on the user's OWN blueprint ──────
@@ -465,27 +514,11 @@ function captureCurrentStep() {
   if (step.id === 'projectName') v = v.trim() || 'MyApp';
   selections[step.id] = v;
 }
-async function generate() {
-  const invoke = tauriInvoke();
-  const dirEl = document.getElementById('target-dir');
-  const targetDir = dirEl ? dirEl.value.trim() : '';
-  if (!targetDir) { setStatus('Enter an export folder before generating.'); return; }
-  const choices = buildBlueprintChoices(selections);
-  if (!invoke) {
-    setStatus('not running inside Bedrock');
-    setOutput('env-error', 'no Tauri backend', 'window.__TAURI__.core.invoke is unavailable — open inside the Bedrock window to generate. (The assembled BlueprintChoices is shown above.)');
-    return;
-  }
-  setStatus(`Generating ${selections.projectName}…`);
-  try {
-    const r = await invoke('export_project', { targetDir, model: JSON.stringify(choices) });
-    renderResult('export_project', r);
-  } catch (err) {
-    setEnvError('export: environment error', "Bedrock's generator couldn't start",
-      'This is an environment problem (the sidecar is missing or couldn\'t run), not a problem with your project. The technical detail is below.', err);
-  }
-}
-function wizardNext() { captureCurrentStep(); if (stepIndex >= REVIEW_STEP) { generate(); return; } stepIndex += 1; renderStep(); }
+// (Eco-Day 72) The wizard's old direct "Generate to a folder" was removed: the wizard now ends at
+// Create (= save_blueprint → workspace), and export is an explicit workspace verb
+// (exportCurrentProject → export_project). The blueprint IS the project; export is not a side
+// effect of Create (plan A72-1). The raw Advanced export panel still exists for power users.
+function wizardNext() { captureCurrentStep(); if (stepIndex >= REVIEW_STEP) { saveProject(); return; } stepIndex += 1; renderStep(); }
 function wizardBack() { captureCurrentStep(); if (stepIndex > 0) stepIndex -= 1; renderStep(); }
 
 // ─── the Advanced harness (raw commands — unchanged) ────────────────────────────────────────
@@ -600,9 +633,16 @@ function init() {
   // ── the router wiring (Eco-Day 71) — pure navigation over the existing screens ──
   document.getElementById('brand-home').addEventListener('click', () => showScreen('welcome'));
   document.getElementById('nav-new').addEventListener('click', startWizard);
-  document.getElementById('nav-workspace').addEventListener('click', () => showScreen('workspace'));
+  document.getElementById('nav-workspace').addEventListener('click', openWorkspace);
   document.getElementById('welcome-create').addEventListener('click', startWizard);
   document.getElementById('welcome-open').addEventListener('click', openExisting);
+  // ── the workspace verbs (Eco-Day 72) — each calls an EXISTING certified command ──
+  document.getElementById('ws-edit').addEventListener('click', editCurrentProject);
+  document.getElementById('ws-export').addEventListener('click', exportCurrentProject);
+  document.getElementById('save-version').addEventListener('click', saveProject);
+  document.getElementById('ws-goto-create').addEventListener('click', startWizard);
+  document.getElementById('ws-goto-open').addEventListener('click', openExisting);
+  renderWorkspace(); // reflect the (empty) project state on load
   showScreen('welcome'); // the app opens on Welcome — one screen at a time
   if (!tauriInvoke()) setStatus('note: Tauri backend not detected (open inside Bedrock to generate). The wizard + the assembled BlueprintChoices still work.');
 }
